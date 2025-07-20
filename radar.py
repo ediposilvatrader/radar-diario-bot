@@ -2,85 +2,61 @@ import os
 import yfinance as yf
 import pandas as pd
 import requests
-from datetime import datetime
-import pytz
 
-# — Seu TOKEN do Bot (obtido no BotFather)
-TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
+# — Seu TOKEN e CHAT_ID via variáveis de ambiente (mais seguro)
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT  = os.getenv("TELEGRAM_CHAT_ID")
 
-# — O chat_id do seu grupo ou canal
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-
-# Períodos das médias
 EMA_FAST = 21
 EMA_MID  = 120
 SMA_LONG = 200
 
-# Lista completa de Tickers para checar
-TICKERS = [
-    "AA","AAPL","ABBV","ABNB","ACN","ADBE","ADI","ADP","AEP","AIG","AKAM","AMAT","AMD","AMGN","AMT",
-    "AMZN","ANET","ANSS","APPN","APPS","ATR","ATVI","AVGO","AVY","AWK","AXON","AXP","AZO","BA","BAC",
-    "BALL","BAX","BB","BBY","BDX","BEN","BF-B","BIDU","BIIB","BILI","BK","BKNG","BLK","BMY","BNS",
-    "BRK-B","BSX","BURL","BX","BYD","BYND","BZUN","C","CAT","CB","CBOE","CCI","CHD","CHGG","CHWY",
-    "CLX","CM","CMA","CMCSA","CME","CMG","CNC","COP","COST","COUP","CP","CPB","CPRI","CPRT","CRM",
-    "CRWD","CSCO","CSX","CTRA","CVNA","CVS","CVX","CYBR","D","DAL","DAN","DBX","DD","DE","DELL","DG",
-    "DHR","DIS","DK","DKNG","DLR","DLTR","DOCU","DT","DUK","DXC","DXCM","EA","EBAY","ECL","ED","EEFT",
-    "EIX","EL","ENB","ENPH","EPR","ETR","ETSY","EVBG","EXAS","EXPE","F","FANG","FCX","FDX","FHN","FITB",
-    "FIVE","FL","FLR","FLT","FOX","FSLY","FTI","FTNT","GDS","GE","GILD","GM","GOLD","GOOG","GPN","GRMN",
-    "GS","GT","HBAN","HD","HLT","HOG","HOLX","HON","HP","HPQ","HRL","HUYA","IAC","IBKR","IBM","IDXX",
-    "ILMN","INCY","INO","INTC","INTU","IRBT","ISRG","J","JNJ","JPM","JWN","KEY","KLAC","KMB","KMX","KO",
-    "LHX","LIN","LLY","LMT","LOW","LRCX","LTHM","LULU","LUMN","LUV","LYFT","MA","MAA","MAC","MAR","MASI",
-    "MAT","MCD","MDB","MDLZ","MDT","MDXG","MELI","META","MGM","MKC","MKTX","MLM","MMM","MNST","MO","MPC",
-    "MRK","MRO","MRVL","MS","MSCI","MSFT","MTCH","MTZ","MU","NEE","NEM","NET","NFLX","NICE","NKE","NOW",
-    "NTAP","NTRS","NVDA","NVO","NVR","NXPI","NXST","OC","OKE","OKTA","OMC","ORCL","PAAS","PANW","PDD",
-    "PEP","PFE","PG","PGR","PH","PINS","PLD","PLNT","PLTR","PM","PNC","PNR","PODD","POOL","PSO","PXD",
-    "PYPL","QCOM","RAD","RBLX","RDFN","RH","RNG","ROKU","RTX","SBAC","SBUX","SE","SEDG","SFIX","SGEN",
-    "SHAK","SHOP","SIRI","SKX","SMAR","SNAP","SNOW","SPLK","SQ","STT","SWK","SYK","T","TAP","TDG","TDOC",
-    "TEAM","TFC","THO","TJX","TMO","TMUS","TRV","TSLA","TSN","TTD","TWLO","TXN","UAL","UBER","UI","UNH",
-    "UNP","UPS","URBN","USB","V","VMW","VZ","W","WBA","WDAY","WDC","WEN","WFC","WHR","WM","WTW","WWE",
-    "WYNN","X","XEL","XOM","YELP","ZG","ZTS"
-]
+# Lista completa (ou subset para debug)
+TICKERS = ["BURL","FHN","L","STT","NTRS","DLR","AMT","TRV","FLR","D","XEL","ETR","AEP","AWK"]
 
-def check_symbol(sym):
-    # Histórico diário e semanal
-    d = yf.Ticker(sym).history(period="60d", interval="1d")
-    w = yf.Ticker(sym).history(period="26wk", interval="1wk")
+def check_symbol(sym, debug=False):
+    # histórico diário e semanal
+    df_d = yf.Ticker(sym).history(period="60d", interval="1d")
+    df_w = yf.Ticker(sym).history(period="26wk", interval="1wk")
 
-    # Calcula as médias
-    d["ema_fast"] = d["Close"].ewm(span=EMA_FAST).mean()
-    d["ema_mid" ] = d["Close"].ewm(span=EMA_MID).mean()
-    d["sma_long"] = d["Close"].rolling(window=SMA_LONG).mean()
+    # médias
+    df_d["ema_fast"] = df_d["Close"].ewm(span=EMA_FAST).mean()
+    df_d["ema_mid"]  = df_d["Close"].ewm(span=EMA_MID).mean()
+    df_d["sma_long"] = df_d["Close"].rolling(SMA_LONG).mean()
 
-    w["ema_fast"] = w["Close"].ewm(span=EMA_FAST).mean()
-    w["ema_mid" ] = w["Close"].ewm(span=EMA_MID).mean()
-    w["sma_long"] = w["Close"].rolling(window=SMA_LONG).mean()
+    df_w["ema_fast"] = df_w["Close"].ewm(span=EMA_FAST).mean()
+    df_w["ema_mid"]  = df_w["Close"].ewm(span=EMA_MID).mean()
+    df_w["sma_long"] = df_w["Close"].rolling(SMA_LONG).mean()
 
-    # Últimas barras
-    last_d = d.iloc[-1]
-    last_w = w.iloc[-1]
+    last_d = df_d.iloc[-1]
+    last_w = df_w.iloc[-1]
 
-    # Condições de filtro
-    cond_d = (
-        last_d.Close > last_d.ema_fast and
-        last_d.Close > last_d.ema_mid  and
-        last_d.Close > last_d.sma_long
+    cond_d = (last_d.Close > last_d.ema_fast
+           and last_d.Close > last_d.ema_mid
+           and last_d.Close > last_d.sma_long)
+    cond_w = (last_w.Close > last_w.ema_fast
+           and last_w.Close > last_w.ema_mid
+           and last_w.Close > last_w.sma_long)
+    three_bulls = (
+        df_d["Close"].iloc[-1]  > df_d["Open"].iloc[-1] and
+        df_d["Close"].iloc[-2]  > df_d["Open"].iloc[-2] and
+        df_d["Close"].iloc[-3]  > df_d["Open"].iloc[-3] and
+        df_d["Close"].iloc[-4]  < df_d["Open"].iloc[-4]
     )
-    cond_w = (
-        last_w.Close > last_w.ema_fast and
-        last_w.Close > last_w.ema_mid  and
-        last_w.Close > last_w.sma_long
-    )
-    # Últimas três barras de alta após uma de baixa
-    seq = d["Close"] > d["Open"]
-    last3 = seq.iloc[-3:].all()           # três últimas são alta
-    prev1 = not seq.iloc[-4]              # a quarta antes é baixa
 
-    return cond_d and cond_w and prev1 and last3
+    if debug:
+        print(f"\n>>> {sym}")
+        print(df_d[["Open","Close","ema_fast","ema_mid","sma_long"]].tail(5))
+        print(f"Cond Diário (preço acima das 3 médias): {cond_d}")
+        print(f"Cond Semanal (preço acima das 3 médias): {cond_w}")
+        print(f"Sinal barras (↓ ↑↑↑): {three_bulls}")
 
-def send_telegram(message: str):
+    return cond_d and cond_w and three_bulls
+
+def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
+        "chat_id": TELEGRAM_CHAT,
         "text": message,
         "parse_mode": "Markdown"
     }
@@ -89,19 +65,17 @@ def send_telegram(message: str):
 
 def main():
     hits = []
+    # debug mode: True para ver por que não passou
     for sym in TICKERS:
-        try:
-            if check_symbol(sym):
-                hits.append(sym)
-        except Exception as e:
-            print(f"Erro em {sym}: {e}")
+        ok = check_symbol(sym, debug=True)
+        if ok:
+            hits.append(sym)
 
-    now = datetime.now(pytz.timezone("America/Sao_Paulo")).strftime("%Y-%m-%d %H:%M")
     if hits:
-        msg = f"*Radar Diário* — {now}\n\n" + "\n".join(f"✅ {s}" for s in hits)
+        msg = "*Radar Diário Automático*\n\n" + "\n".join(f"✅ {s}" for s in hits)
+        send_telegram(msg)
     else:
-        msg = f"*Radar Diário* — {now}\n\nNenhum ativo bateu o filtro hoje."
-    send_telegram(msg)
+        send_telegram("⚠️ Nenhum ativo bateu o filtro hoje.")
 
 if __name__ == "__main__":
     main()
