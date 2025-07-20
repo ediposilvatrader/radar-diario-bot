@@ -12,12 +12,13 @@ EMA_FAST = 21
 EMA_MID  = 120
 SMA_LONG = 200
 
-# Tickers de teste
+# Tickers de exemplo
 TICKERS = ["BURL","FHN","L","STT","NTRS","DLR","AMT","TRV","FLR","D","XEL","ETR","AEP","AWK"]
 
 def check_symbol(sym, debug=False):
-    df_d = yf.Ticker(sym).history(period="60d", interval="1d", auto_adjust=True)
-    df_w = yf.Ticker(sym).history(period="26wk", interval="1wk", auto_adjust=True)
+    # trazer dados suficientes pra SMA200 existir
+    df_d = yf.Ticker(sym).history(period="250d", interval="1d", auto_adjust=True)
+    df_w = yf.Ticker(sym).history(period="250wk", interval="1wk", auto_adjust=True)
 
     df_d["ema_fast"] = df_d["Close"].ewm(span=EMA_FAST, adjust=False).mean()
     df_d["ema_mid"]  = df_d["Close"].ewm(span=EMA_MID, adjust=False).mean()
