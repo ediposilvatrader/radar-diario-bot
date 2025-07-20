@@ -12,15 +12,13 @@ EMA_FAST = 21
 EMA_MID  = 120
 SMA_LONG = 200
 
-# Tickers de teste (sua lista completa aqui)
+# Tickers de teste
 TICKERS = ["BURL","FHN","L","STT","NTRS","DLR","AMT","TRV","FLR","D","XEL","ETR","AEP","AWK"]
 
 def check_symbol(sym, debug=False):
-    # Histórico diário e semanal já com ajustes
     df_d = yf.Ticker(sym).history(period="60d", interval="1d", auto_adjust=True)
     df_w = yf.Ticker(sym).history(period="26wk", interval="1wk", auto_adjust=True)
 
-    # Calcula médias sobre Adj Close
     df_d["ema_fast"] = df_d["Close"].ewm(span=EMA_FAST, adjust=False).mean()
     df_d["ema_mid"]  = df_d["Close"].ewm(span=EMA_MID, adjust=False).mean()
     df_d["sma_long"] = df_d["Close"].rolling(window=SMA_LONG).mean()
@@ -32,7 +30,6 @@ def check_symbol(sym, debug=False):
     last_d = df_d.iloc[-1]
     last_w = df_w.iloc[-1]
 
-    # condições de preço acima das médias
     cond_d = (last_d.Close > last_d.ema_fast
            and last_d.Close > last_d.ema_mid
            and last_d.Close > last_d.sma_long)
@@ -40,7 +37,6 @@ def check_symbol(sym, debug=False):
            and last_w.Close > last_w.ema_mid
            and last_w.Close > last_w.sma_long)
 
-    # sequencia: quarta barra de baixa, seguida de 3 de alta
     three_bulls = (
         df_d["Close"].iloc[-1]  > df_d["Open"].iloc[-1] and
         df_d["Close"].iloc[-2]  > df_d["Open"].iloc[-2] and
@@ -50,7 +46,7 @@ def check_symbol(sym, debug=False):
 
     if debug:
         print(f"\n>>> {sym}")
-        display(df_d[["Open","Close","ema_fast","ema_mid","sma_long"]].tail(5))
+        print(df_d[["Open","Close","ema_fast","ema_mid","sma_long"]].tail(5).to_string())
         print(f"Cond Diário (preço>EMAs+SMA): {cond_d}")
         print(f"Cond Semanal  (preço>EMAs+SMA): {cond_w}")
         print(f"Sinal barras (↓↑↑↑): {three_bulls}")
@@ -70,7 +66,7 @@ def send_telegram(message):
 def main():
     hits = []
     for sym in TICKERS:
-        ok = check_symbol(sym, debug=True)  # ativa debug
+        ok = check_symbol(sym, debug=True)
         if ok:
             hits.append(sym)
 
