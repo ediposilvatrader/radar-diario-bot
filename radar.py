@@ -12,7 +12,7 @@ EMA_FAST = 21
 EMA_MID  = 120
 SMA_LONG = 200
 
-# Lista completa de tickers
+# Sua lista completa de tickers
 TICKERS = [
     "AA","AAPL","ABBV","ABNB","ACN","ADBE","ADI","ADP","AEP","AIG","AKAM",
     "AMAT","AMD","AMGN","AMT","AMZN","ANET","ANSS","APPN","APPS","ATR","ATVI",
@@ -44,10 +44,11 @@ TICKERS = [
 ]
 
 def check_symbol(sym):
-    # usa auto_adjust para ajuste por dividendos e escala logarítmica não afeta cálculo
+    # Baixa dados suficientes para SMA200
     df_d = yf.Ticker(sym).history(period="250d", interval="1d", auto_adjust=True)
     df_w = yf.Ticker(sym).history(period="250wk", interval="1wk", auto_adjust=True)
 
+    # Calcula as médias móveis
     df_d["ema_fast"] = df_d["Close"].ewm(span=EMA_FAST, adjust=False).mean()
     df_d["ema_mid"]  = df_d["Close"].ewm(span=EMA_MID, adjust=False).mean()
     df_d["sma_long"] = df_d["Close"].rolling(window=SMA_LONG).mean()
@@ -59,6 +60,7 @@ def check_symbol(sym):
     last_d = df_d.iloc[-1]
     last_w = df_w.iloc[-1]
 
+    # Verifica se o preço fechou acima das 3 médias, D1 e W1
     cond_d = (
         last_d.Close > last_d.ema_fast and
         last_d.Close > last_d.ema_mid  and
@@ -69,13 +71,20 @@ def check_symbol(sym):
         last_w.Close > last_w.ema_mid  and
         last_w.Close > last_w.sma_long
     )
-    bull_d = last_d.Close > last_d.Open
 
-    return cond_d and cond_w and bull_d
+    # Padrão de candles: penúltima de baixa seguida de 3 altas
+    bars = df_d.tail(4)
+    bear = bars["Close"].iloc[0] < bars["Open"].iloc[0]
+    bull1= bars["Close"].iloc[1] > bars["Open"].iloc[1]
+    bull2= bars["Close"].iloc[2] > bars["Open"].iloc[2]
+    bull3= bars["Close"].iloc[3] > bars["Open"].iloc[3]
+    pattern = bear and bull1 and bull2 and bull3
 
-def send_telegram(message):
+    return cond_d and cond_w and pattern
+
+def send_telegram(message: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT, "text": message, "parse_mode": "Markdown"}
+    payload = {"chat_id": TELEGRAM_CHAT, "text": message}
     resp = requests.post(url, json=payload)
     print("Telegram response:", resp.status_code, resp.text)
 
@@ -85,14 +94,11 @@ def main():
         try:
             if check_symbol(sym):
                 hits.append(sym)
-        except:
-            continue
+        except Exception as e:
+            print(f"Erro em {sym}: {e}")
 
     if hits:
-        msg = (
-            "*Radar D1 US PDV*\n\n"
-            f"Sinais de Compra: ({', '.join(hits)})"
-        )
+        msg = "*Radar D1 US PDV*\n\n" + f"Sinais de Compra: ({', '.join(hits)})"
     else:
         msg = "*Radar D1 US PDV*\n\nNenhum sinal de compra hoje."
 
