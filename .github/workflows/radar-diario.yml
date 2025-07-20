@@ -1,29 +1,36 @@
-name: 🚀 Executar Radar D1 US PDV
+name: Executar Radar D1 US PDV
 
 on:
-  schedule:
-    # Seg–Sex às 21:45 UTC = 18:45 BRT
-    - cron: '45 21 * * 1-5'
+  # Permite executar manualmente via botão “Run workflow”
   workflow_dispatch:
+
+  # Agenda automática: 21:45 UTC (= 18:45 BRT) de segunda a sexta
+  schedule:
+    - cron: '45 21 * * 1-5'
 
 jobs:
   run-radar:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Check out code
+      # 1) Puxa o código
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      # 2) Prepara o Python
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.x'
 
+      # 3) Instala bibliotecas
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install yfinance pandas requests pandas_market_calendars pytz
+          pip install requests pandas yfinance
 
-      - name: Run Radar Script
+      # 4) Executa o script, usando os secrets para Telegram
+      - name: Run radar script
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
