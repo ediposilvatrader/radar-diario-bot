@@ -2,7 +2,7 @@ name: 🚀 Executar Radar D1 US PDV
 
 on:
   schedule:
-    - cron: '45 21 * * 1-5'
+    - cron: '10 23 * * *'
   workflow_dispatch:
 
 jobs:
