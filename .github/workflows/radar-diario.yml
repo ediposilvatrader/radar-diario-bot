@@ -1,12 +1,10 @@
 name: Executar Radar D1 US PDV
 
 on:
-  # Permite executar manualmente via botão “Run workflow”
-  workflow_dispatch:
-
-  # Agenda automática: 21:45 UTC (= 18:45 BRT) de segunda a sexta
   schedule:
+    # roda às 18:45 (UTC‑3 Brasília) de segunda a sexta
     - cron: '45 21 * * 1-5'
+  workflow_dispatch:
 
 jobs:
   run-radar:
