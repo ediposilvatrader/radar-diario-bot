@@ -1,87 +1,85 @@
 import os
 import yfinance as yf
-import pandas as pd
 import requests
 
-# — Seu TOKEN do Bot (obtido no BotFather)
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "SEU_TOKEN_AQUI")
+# — TOKEN e CHAT_ID via Secrets
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT  = os.getenv("TELEGRAM_CHAT_ID")
 
-# — O chat_id que você anotou
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "SEU_CHAT_ID_AQUI")
-
-# Períodos das médias
+# — Parâmetros das médias
 EMA_FAST = 21
 EMA_MID  = 120
 SMA_LONG = 200
 
-# Lista de Tickers para checar
+# — Lista completa de tickers
 TICKERS = [
-    # ... sua lista completa aqui ...
-    "AAPL","MSFT","AMZN","GOOGL","TSLA","META","NVDA",
-    # etc.
+    "AA","AAPL","ABBV","ABNB","ACN","ADBE","ADI","ADP","AEP","AIG","AKAM","AMAT",
+    "AMD","AMGN","AMT","AMZN","ANET","ANSS","APPN","APPS","ATR","ATVI","AVGO","AVY",
+    "AWK","AXON","AXP","AZO","BA","BAC","BALL","BAX","BB","BBY","BDX","BEN","BF-B",
+    "BIDU","BIIB","BILI","BK","BKNG","BLK","BMY","BNS","BRK-B","BSX","BURL","BX",
+    "BYD","BYND","BZUN","C","CAT","CB","CBOE","CCI","CHD","CHGG","CHWY","CLX","CM",
+    "CMA","CMCSA","CME","CMG","CNC","COP","COST","COUP","CP","CPB","CPRI","CPRT","CRM",
+    "CRWD","CSCO","CSX","CTRA","CVNA","CVS","CVX","CYBR","D","DAL","DAN","DBX","DD",
+    "DE","DELL","DG","DHR","DIS","DK","DKNG","DLR","DLTR","DOCU","DT","DUK","DXC",
+    "DXCM","EA","EBAY","ECL","ED","EEFT","EIX","EL","ENB","ENPH","EPR","ETR","ETSY",
+    "EVBG","EXAS","EXPE","F","FANG","FCX","FDX","FHN","FITB","FIVE","FL","FLR","FLT",
+    "FOX","FSLY","FTI","FTNT","GDS","GE","GILD","GM","GOLD","GOOG","GPN","GRMN","GS",
+    "GT","HBAN","HD","HLT","HOG","HOLX","HON","HP","HPQ","HRL","HUYA","IAC","IBKR",
+    "IBM","IDXX","ILMN","INCY","INO","INTC","INTU","IRBT","ISRG","J","JNJ","JPM","JWN",
+    "KEY","KLAC","KMB","KMX","KO","LHX","LIN","LLY","LMT","LOW","LRCX","LTHM","LULU",
+    "LUMN","LUV","LYFT","MA","MAA","MAC","MAR","MASI","MAT","MCD","MDB","MDLZ","MDT",
+    "MDXG","MELI","META","MGM","MKC","MKTX","MLM","MMM","MNST","MO","MPC","MRK","MRO",
+    "MRVL","MS","MSCI","MSFT","MTCH","MTZ","MU","NEE","NEM","NET","NFLX","NICE","NKE",
+    "NOW","NTAP","NTRS","NVDA","NVO","NVR","NXPI","NXST","OC","OKE","OKTA","OMC","ORCL",
+    "PAAS","PANW","PDD","PEP","PFE","PG","PGR","PH","PINS","PLD","PLNT","PLTR","PM","PNC",
+    "PNR","PODD","POOL","PSO","PXD","PYPL","QCOM","RAD","RBLX","RDFN","RH","RNG","ROKU",
+    "RTX","SBAC","SBUX","SE","SEDG","SFIX","SGEN","SHAK","SHOP","SIRI","SKX","SMAR","SNAP",
+    "SNOW","SPLK","SQ","STT","SWK","SYK","T","TAP","TDG","TDOC","TEAM","TFC","THO","TJX",
+    "TMO","TMUS","TRV","TSLA","TSN","TTD","TWLO","TXN","UAL","UBER","UI","UNH","UNP","UPS",
+    "URBN","USB","V","VMW","VZ","W","WBA","WDAY","WDC","WEN","WFC","WHR","WM","WTW","WWE",
+    "WYNN","X","XEL","XOM","YELP","ZG","ZTS"
 ]
 
-def check_symbol(sym: str, debug: bool = False) -> bool:
-    """
-    Retorna True se:
-      - No gráfico diário, a última barra fechou acima das 3 médias
-      - No gráfico semanal, idem
-      - E ocorreu padrão: barra de baixa seguida por 3 barras de alta
-    Se debug=True, imprime os últimos dados para inspeção.
-    """
-    # Busca 60 dias / 26 semanas
+def check_symbol(sym):
+    # diário: últimos 60 dias, ajustes por dividendos
     df_d = yf.Ticker(sym).history(period="60d", interval="1d", auto_adjust=True)
-    df_w = yf.Ticker(sym).history(period="26wk", interval="1wk", auto_adjust=True)
+    # semanal: últimos 5 anos, para ter SMA200 válida
+    df_w = yf.Ticker(sym).history(period="5y", interval="1wk", auto_adjust=True)
 
-    # Calcula médias
+    # médias no diário
     df_d["ema_fast"] = df_d["Close"].ewm(span=EMA_FAST, adjust=False).mean()
-    df_d["ema_mid"]  = df_d["Close"].ewm(span=EMA_MID, adjust=False).mean()
+    df_d["ema_mid"]  = df_d["Close"].ewm(span=EMA_MID,  adjust=False).mean()
     df_d["sma_long"] = df_d["Close"].rolling(window=SMA_LONG).mean()
 
+    # médias no semanal
     df_w["ema_fast"] = df_w["Close"].ewm(span=EMA_FAST, adjust=False).mean()
-    df_w["ema_mid"]  = df_w["Close"].ewm(span=EMA_MID, adjust=False).mean()
+    df_w["ema_mid"]  = df_w["Close"].ewm(span=EMA_MID,  adjust=False).mean()
     df_w["sma_long"] = df_w["Close"].rolling(window=SMA_LONG).mean()
 
-    # Valores finais
     last_d = df_d.iloc[-1]
     last_w = df_w.iloc[-1]
 
-    # Condições de média
-    cond_d = (last_d.Close > last_d.ema_fast
-              and last_d.Close > last_d.ema_mid
-              and last_d.Close > last_d.sma_long)
-    cond_w = (last_w.Close > last_w.ema_fast
-              and last_w.Close > last_w.ema_mid
-              and last_w.Close > last_w.sma_long)
+    # condições de fechamento acima das 3 médias
+    cond_d = (last_d.Close > last_d.ema_fast and
+              last_d.Close > last_d.ema_mid  and
+              last_d.Close > last_d.sma_long)
+    cond_w = (last_w.Close > last_w.ema_fast and
+              last_w.Close > last_w.ema_mid  and
+              last_w.Close > last_w.sma_long)
 
-    # Padrão de barras: 4 últimas barras no diário
-    # [i-4]: baixa, [i-3],[i-2],[i-1]: altas
-    closes = df_d["Close"].values
-    opens  = df_d["Open"].values
-    if len(closes) < 4:
-        bar_signal = False
-    else:
-        is_bear = closes[-4] < opens[-4]
-        is_bull3 = all(closes[-i] > opens[-i] for i in (3,2,1))
-        bar_signal = is_bear and is_bull3
+    # padrão: 1 baixa seguida por 3 altas
+    bars = df_d.tail(4)
+    bear  = bars["Close"].iloc[0] < bars["Open"].iloc[0]
+    bull1 = bars["Close"].iloc[1] > bars["Open"].iloc[1]
+    bull2 = bars["Close"].iloc[2] > bars["Open"].iloc[2]
+    bull3 = bars["Close"].iloc[3] > bars["Open"].iloc[3]
+    pattern = bear and bull1 and bull2 and bull3
 
-    if debug:
-        print(f"\n>>> {sym}")
-        print(df_d[["Open","Close","ema_fast","ema_mid","sma_long"]].tail(4))
-        print(f"Cond Diário (preço>EMAs+SMA): {cond_d}")
-        print(f"Cond Semanal(preço>EMAs+SMA): {cond_w}")
-        print(f"Sinal barras (↓↑↑↑): {bar_signal}")
+    return cond_d and cond_w and pattern
 
-    return cond_d and cond_w and bar_signal
-
-def send_telegram(message: str) -> None:
-    """Envia mensagem formatada em Markdown para o seu chat."""
+def send_telegram(message: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown"
-    }
+    payload = {"chat_id": TELEGRAM_CHAT, "text": message, "parse_mode": "Markdown"}
     resp = requests.post(url, json=payload)
     print("Telegram response:", resp.status_code, resp.text)
 
@@ -89,18 +87,17 @@ def main():
     hits = []
     for sym in TICKERS:
         try:
-            ok = check_symbol(sym, debug=True)
-            if ok:
+            if check_symbol(sym):
                 hits.append(sym)
         except Exception as e:
-            print(f"[!] erro ao processar {sym}: {e}")
+            print(f"Erro em {sym}: {e}")
 
-    header = "*🚀 Radar D1 US PDV*\n\n"
     if hits:
-        body = "*Sinais de Compra:* " + ", ".join(hits)
+        msg = "*Radar D1 US PDV*\n\n" + f"Sinais de Compra: ({', '.join(hits)})"
     else:
-        body = "_Nenhum sinal encontrado hoje._"
-    send_telegram(header + body)
+        msg = "*Radar D1 US PDV*\n\nNenhum sinal de compra hoje."
+
+    send_telegram(msg)
 
 if __name__ == "__main__":
     main()
