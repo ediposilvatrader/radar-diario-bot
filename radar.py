@@ -4,43 +4,49 @@ import pandas as pd
 import requests
 
 # — Seu TOKEN do Bot (obtido no BotFather)
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "seu_token_aqui")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "SEU_TOKEN_AQUI")
 
-# — O chat_id (ou ID de grupo) onde o bot vai enviar as mensagens
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "seu_chat_id_aqui")
+# — O chat_id que você anotou
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "SEU_CHAT_ID_AQUI")
 
-# — Períodos das médias
+# Períodos das médias
 EMA_FAST = 21
 EMA_MID  = 120
 SMA_LONG = 200
 
-# — Lista de Tickers para checar (adicione aqui todos que desejar)
+# Lista de Tickers para checar
 TICKERS = [
-    "AA","AAPL","ABBV","ABNB","ACN","ADBE","ADI","ADP","AEP","AIG","AKAM","AMAT","AMD","AMGN","AMT","AMZN",
-    "ANET","ANSS","APPN","APPS","ATR","ATVI","AVGO","AVY","AWK","AXON","AXP","AZO","BA","BAC","BALL","BAX",
-    # ... etc (cole a sua lista completa aqui)
+    # ... sua lista completa aqui ...
+    "AAPL","MSFT","AMZN","GOOGL","TSLA","META","NVDA",
+    # etc.
 ]
 
-def check_symbol(sym):
-    # diário: últimos 60 dias
-    df_d = yf.Ticker(sym).history(period="60d", interval="1d")
-    # semanal: último 5 anos (precisamos de 200+ semanas para a SMA de 200)
-    df_w = yf.Ticker(sym).history(period="5y", interval="1wk")
+def check_symbol(sym: str, debug: bool = False) -> bool:
+    """
+    Retorna True se:
+      - No gráfico diário, a última barra fechou acima das 3 médias
+      - No gráfico semanal, idem
+      - E ocorreu padrão: barra de baixa seguida por 3 barras de alta
+    Se debug=True, imprime os últimos dados para inspeção.
+    """
+    # Busca 60 dias / 26 semanas
+    df_d = yf.Ticker(sym).history(period="60d", interval="1d", auto_adjust=True)
+    df_w = yf.Ticker(sym).history(period="26wk", interval="1wk", auto_adjust=True)
 
-    # cálculo das médias
-    df_d["ema_fast"] = df_d["Close"].ewm(span=EMA_FAST).mean()
-    df_d["ema_mid"]  = df_d["Close"].ewm(span=EMA_MID).mean()
-    df_d["sma_long"] = df_d["Close"].rolling(SMA_LONG).mean()
+    # Calcula médias
+    df_d["ema_fast"] = df_d["Close"].ewm(span=EMA_FAST, adjust=False).mean()
+    df_d["ema_mid"]  = df_d["Close"].ewm(span=EMA_MID, adjust=False).mean()
+    df_d["sma_long"] = df_d["Close"].rolling(window=SMA_LONG).mean()
 
-    df_w["ema_fast"] = df_w["Close"].ewm(span=EMA_FAST).mean()
-    df_w["ema_mid"]  = df_w["Close"].ewm(span=EMA_MID).mean()
-    df_w["sma_long"] = df_w["Close"].rolling(SMA_LONG).mean()
+    df_w["ema_fast"] = df_w["Close"].ewm(span=EMA_FAST, adjust=False).mean()
+    df_w["ema_mid"]  = df_w["Close"].ewm(span=EMA_MID, adjust=False).mean()
+    df_w["sma_long"] = df_w["Close"].rolling(window=SMA_LONG).mean()
 
-    # últimas linhas
+    # Valores finais
     last_d = df_d.iloc[-1]
     last_w = df_w.iloc[-1]
 
-    # condições de estar acima das 3 médias
+    # Condições de média
     cond_d = (last_d.Close > last_d.ema_fast
               and last_d.Close > last_d.ema_mid
               and last_d.Close > last_d.sma_long)
@@ -48,19 +54,28 @@ def check_symbol(sym):
               and last_w.Close > last_w.ema_mid
               and last_w.Close > last_w.sma_long)
 
-    # sinal de barras: uma de baixa seguida por 3 de alta
-    closes = df_d["Close"].iloc[-4:]
-    opens  = df_d["Open"].iloc[-4:]
-    bars = list(zip(opens, closes))
-    # primeiro deve ser baixa, depois três altas
-    bar_signal = (bars[0][1] < bars[0][0]  # 1ª baixa
-                  and bars[1][1] > bars[1][0]
-                  and bars[2][1] > bars[2][0]
-                  and bars[3][1] > bars[3][0])
+    # Padrão de barras: 4 últimas barras no diário
+    # [i-4]: baixa, [i-3],[i-2],[i-1]: altas
+    closes = df_d["Close"].values
+    opens  = df_d["Open"].values
+    if len(closes) < 4:
+        bar_signal = False
+    else:
+        is_bear = closes[-4] < opens[-4]
+        is_bull3 = all(closes[-i] > opens[-i] for i in (3,2,1))
+        bar_signal = is_bear and is_bull3
+
+    if debug:
+        print(f"\n>>> {sym}")
+        print(df_d[["Open","Close","ema_fast","ema_mid","sma_long"]].tail(4))
+        print(f"Cond Diário (preço>EMAs+SMA): {cond_d}")
+        print(f"Cond Semanal(preço>EMAs+SMA): {cond_w}")
+        print(f"Sinal barras (↓↑↑↑): {bar_signal}")
 
     return cond_d and cond_w and bar_signal
 
-def send_telegram(message: str):
+def send_telegram(message: str) -> None:
+    """Envia mensagem formatada em Markdown para o seu chat."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -68,13 +83,14 @@ def send_telegram(message: str):
         "parse_mode": "Markdown"
     }
     resp = requests.post(url, json=payload)
-    print(f"Telegram response: {resp.status_code} {resp.text}")
+    print("Telegram response:", resp.status_code, resp.text)
 
 def main():
     hits = []
     for sym in TICKERS:
         try:
-            if check_symbol(sym):
+            ok = check_symbol(sym, debug=True)
+            if ok:
                 hits.append(sym)
         except Exception as e:
             print(f"[!] erro ao processar {sym}: {e}")
