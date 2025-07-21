@@ -3,7 +3,7 @@ name: 🚀 Executar Radar D1 US PDV
 on:
   schedule:
     # 45 21 UTC → 18:45 BRT, segunda a sexta
-    - cron: '45 21 * * 1-5'
+    - cron: '*/1 * * * *'
   workflow_dispatch:
 
 jobs:
