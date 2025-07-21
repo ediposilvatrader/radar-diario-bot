@@ -2,6 +2,7 @@ name: 🚀 Executar Radar D1 US PDV
 
 on:
   schedule:
+    # 45 21 UTC → 18:45 BRT, segunda a sexta
     - cron: '45 21 * * 1-5'
   workflow_dispatch:
 
@@ -21,7 +22,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests pandas yfinance
+          # <-- adicionamos o pandas_market_calendars aqui
+          pip install requests pandas yfinance pandas_market_calendars
 
       - name: Run radar script
         env:
