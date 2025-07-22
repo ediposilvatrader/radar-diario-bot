@@ -14,20 +14,17 @@ EMA_FAST = 21
 EMA_MID  = 120
 SMA_LONG = 200
 
-# Símbolo para debugar individualmente
-DEBUG_SYMBOL = "EXPE"   # troque aqui pelo ticker que quiser inspecionar
-
-# Lista completa de tickers (sem cifrão)
+# Lista completa de tickers (sem ATVI, COUP, EVBG)
 TICKERS = [
     "AA","AAPL","ABBV","ABNB","ACN","ADBE","ADI","ADP","AEP","AIG","AKAM","AMAT","AMD",
     "AMGN","AMT","AMZN","ANET","ANSS","APPN","APPS","ATR","ATVI","AVGO","AVY","AWK","AXON",
     "AXP","AZO","BA","BAC","BALL","BAX","BB","BBY","BDX","BEN","BF-B","BIDU","BIIB","BILI",
     "BK","BKNG","BLK","BMY","BNS","BRK-B","BSX","BURL","BX","BYD","BYND","BZUN","C","CAT",
     "CB","CBOE","CCI","CHD","CHGG","CHWY","CLX","CM","CMA","CMCSA","CME","CMG","CNC","COP",
-    "COST","COUP","CP","CPB","CPRI","CPRT","CRM","CRWD","CSCO","CSX","CTRA","CVNA","CVS","CVX",
+    "COST","CP","CPB","CPRI","CPRT","CRM","CRWD","CSCO","CSX","CTRA","CVNA","CVS","CVX",
     "CYBR","D","DAL","DAN","DBX","DD","DE","DELL","DG","DHR","DIS","DK","DKNG","DLR","DLTR",
     "DOCU","DT","DUK","DXC","DXCM","EA","EBAY","ECL","ED","EEFT","EIX","EL","ENB","ENPH","EPR",
-    "ETR","ETSY","EVBG","EXAS","EXPE","F","FANG","FCX","FDX","FHN","FITB","FIVE","FL","FLR",
+    "ETR","ETSY","EXAS","EXPE","F","FANG","FCX","FDX","FHN","FITB","FIVE","FL","FLR",
     "FOX","FSLY","FTI","FTNT","GDS","GE","GILD","GM","GOOG","GPN","GRMN","GS","GT",
     "HBAN","HD","HLT","HOG","HOLX","HON","HP","HPQ","HRL","HUYA","IAC","IBKR","IBM","IDXX","ILMN",
     "INCY","INO","INTC","INTU","IRBT","ISRG","J","JNJ","JPM","JWN","KEY","KLAC","KMB","KMX","KO",
@@ -53,11 +50,7 @@ def is_market_open(now_utc):
     close_utc = sched.iloc[0]["market_close"].tz_convert("UTC")
     return open_utc <= now_utc <= close_utc
 
-def check_symbol(sym: str, debug: bool=False):
-    """
-    Se debug=False: retorna True/False.
-    Se debug=True: retorna (df_d, df_w, pattern, cond_d, cond_w).
-    """
+def check_symbol(sym: str):
     # histórico diário: pelo menos 400 dias para SMA200
     df_d = yf.Ticker(sym).history(period="400d", interval="1d", auto_adjust=True)
     # histórico semanal: pelo menos 5 anos para SMA200 semanal
@@ -90,9 +83,6 @@ def check_symbol(sym: str, debug: bool=False):
     cond_d = (ld.Close > ld.ema_fast and ld.Close > ld.ema_mid and ld.Close > ld.sma_long)
     cond_w = (lw.Close > lw.ema_fast and lw.Close > lw.ema_mid and lw.Close > lw.sma_long)
 
-    if debug:
-        return df_d, df_w, pattern, cond_d, cond_w
-
     return pattern and cond_d and cond_w
 
 def send_telegram(msg: str):
@@ -103,7 +93,6 @@ def send_telegram(msg: str):
 def main():
     now = datetime.datetime.now(datetime.timezone.utc)
 
-    # Se vier por schedule, pula feriado/final de semana
     if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
         if not is_market_open(now):
             print("Bolsa fechada ou feriado, pulando execução.")
@@ -113,24 +102,11 @@ def main():
 
     for sym in TICKERS:
         try:
-            if sym == DEBUG_SYMBOL:
-                # modo debug para um símbolo específico
-                df_d, df_w, pattern, cond_d, cond_w = check_symbol(sym, debug=True)
-                print(f"\n>>> DEBUG {sym} <<<")
-                print("Últimas 4 barras D1 (Open,Close):")
-                print(df_d[["Open","Close"]].tail(4).to_string())
-                print(f"Pattern (1↓+3↑): {pattern}")
-                print(f"Cond D1 (>EMAs+SMA?): {cond_d}")
-                print(f"Cond W1 (>EMAs+SMA?): {cond_w}\n")
-                if pattern and cond_d and cond_w:
-                    hits.append(sym)
-            else:
-                if check_symbol(sym):
-                    hits.append(sym)
+            if check_symbol(sym):
+                hits.append(sym)
         except Exception as e:
             print(f"Erro ao processar {sym}: {e}")
 
-    # monta e envia mensagem
     if hits:
         msg = "*🚀 Radar D1 US PDV*\n\n*Sinais de Compra:* " + ", ".join(hits)
     else:
