@@ -15,12 +15,12 @@ EMA_MID  = 120
 SMA_LONG = 200
 
 # Símbolo para debugar individualmente
-DEBUG_SYMBOL = "EXPE"   # troque aqui pelo ticker que você quiser inspecionar
+DEBUG_SYMBOL = "EXPE"   # troque aqui pelo ticker que quiser inspecionar
 
 # Lista completa de tickers
 TICKERS = [
     "AAPL","MSFT","AMZN","GOOGL","TSLA","META","NVDA",
-    # ... (adicione sua lista completa aqui) ...
+    # ... (adicione aqui todos os tickers que você me passou) ...
 ]
 
 def is_market_open(now_utc):
@@ -38,21 +38,22 @@ def check_symbol(sym: str, debug: bool=False):
     Se debug=False: retorna True/False.
     Se debug=True: retorna (df_d, df_w, pattern, cond_d, cond_w).
     """
-    # histórico
-    df_d = yf.Ticker(sym).history(period="60d", interval="1d", auto_adjust=True)
-    df_w = yf.Ticker(sym).history(period="26wk", interval="1wk", auto_adjust=True)
+    # histórico diário: pelo menos 400 dias para SMA200
+    df_d = yf.Ticker(sym).history(period="400d", interval="1d", auto_adjust=True)
+    # histórico semanal: pelo menos 5 anos para SMA200 semanal (~260 semanas/ano ×5)
+    df_w = yf.Ticker(sym).history(period="5y", interval="1wk", auto_adjust=True)
 
-    # médias D1
+    # calcula médias no diário
     df_d["ema_fast"] = df_d["Close"].ewm(span=EMA_FAST).mean()
     df_d["ema_mid"]  = df_d["Close"].ewm(span=EMA_MID).mean()
     df_d["sma_long"] = df_d["Close"].rolling(window=SMA_LONG).mean()
 
-    # médias W1
+    # calcula médias no semanal
     df_w["ema_fast"] = df_w["Close"].ewm(span=EMA_FAST).mean()
     df_w["ema_mid"]  = df_w["Close"].ewm(span=EMA_MID).mean()
     df_w["sma_long"] = df_w["Close"].rolling(window=SMA_LONG).mean()
 
-    # padrão de barras D1 (1↓ + 3↑)
+    # padrão de barras no diário: 1 de baixa seguida de 3 de alta
     last4 = df_d.tail(4)
     opens  = last4["Open"].values
     closes = last4["Close"].values
@@ -63,7 +64,7 @@ def check_symbol(sym: str, debug: bool=False):
         closes[3] > opens[3]
     )
 
-    # condições D1 e W1 preço > médias
+    # condições de preço > médias (último candle)
     ld = df_d.iloc[-1]
     lw = df_w.iloc[-1]
     cond_d = (ld.Close > ld.ema_fast and ld.Close > ld.ema_mid and ld.Close > ld.sma_long)
@@ -82,25 +83,25 @@ def send_telegram(msg: str):
 def main():
     now = datetime.datetime.now(datetime.timezone.utc)
 
-    # só bloqueia em feriados/final de semana quando for schedule
+    # Se vier por schedule, pula feriado/final de semana
     if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
         if not is_market_open(now):
             print("Bolsa fechada ou feriado, pulando execução.")
             return
 
     hits = []
+
     for sym in TICKERS:
         try:
             if sym == DEBUG_SYMBOL:
-                # modo debug para o símbolo específico
+                # modo debug para um símbolo específico
                 df_d, df_w, pattern, cond_d, cond_w = check_symbol(sym, debug=True)
                 print(f"\n>>> DEBUG {sym} <<<")
-                print("Últimas 4 barras D1 (Open, Close):")
+                print("Últimas 4 barras D1 (Open,Close):")
                 print(df_d[["Open","Close"]].tail(4).to_string())
-                print(f"  Pattern (1↓+3↑): {pattern}")
-                print(f"  Cond D1 (>EMAs+SMA?): {cond_d}")
-                print(f"  Cond W1 (>EMAs+SMA?): {cond_w}\n")
-                # continua para incluir ou não no hits
+                print(f"Pattern (1↓+3↑): {pattern}")
+                print(f"Cond D1 (>EMAs+SMA?): {cond_d}")
+                print(f"Cond W1 (>EMAs+SMA?): {cond_w}\n")
                 if pattern and cond_d and cond_w:
                     hits.append(sym)
             else:
@@ -109,7 +110,7 @@ def main():
         except Exception as e:
             print(f"Erro ao processar {sym}: {e}")
 
-    # monta mensagem
+    # monta e envia mensagem
     if hits:
         msg = "*🚀 Radar D1 US PDV*\n\n*Sinais de Compra:* " + ", ".join(hits)
     else:
