@@ -17,10 +17,30 @@ SMA_LONG = 200
 # Símbolo para debugar individualmente
 DEBUG_SYMBOL = "EXPE"   # troque aqui pelo ticker que quiser inspecionar
 
-# Lista completa de tickers
+# Lista completa de tickers (sem cifrão)
 TICKERS = [
-    "AAPL","MSFT","AMZN","GOOGL","TSLA","META","NVDA",
-    # ... (adicione aqui todos os tickers que você me passou) ...
+    "AA","AAPL","ABBV","ABNB","ACN","ADBE","ADI","ADP","AEP","AIG","AKAM","AMAT","AMD",
+    "AMGN","AMT","AMZN","ANET","ANSS","APPN","APPS","ATR","ATVI","AVGO","AVY","AWK","AXON",
+    "AXP","AZO","BA","BAC","BALL","BAX","BB","BBY","BDX","BEN","BF-B","BIDU","BIIB","BILI",
+    "BK","BKNG","BLK","BMY","BNS","BRK-B","BSX","BURL","BX","BYD","BYND","BZUN","C","CAT",
+    "CB","CBOE","CCI","CHD","CHGG","CHWY","CLX","CM","CMA","CMCSA","CME","CMG","CNC","COP",
+    "COST","COUP","CP","CPB","CPRI","CPRT","CRM","CRWD","CSCO","CSX","CTRA","CVNA","CVS","CVX",
+    "CYBR","D","DAL","DAN","DBX","DD","DE","DELL","DG","DHR","DIS","DK","DKNG","DLR","DLTR",
+    "DOCU","DT","DUK","DXC","DXCM","EA","EBAY","ECL","ED","EEFT","EIX","EL","ENB","ENPH","EPR",
+    "ETR","ETSY","EVBG","EXAS","EXPE","F","FANG","FCX","FDX","FHN","FITB","FIVE","FL","FLR",
+    "FLT","FOX","FSLY","FTI","FTNT","GDS","GE","GILD","GM","GOLD","GOOG","GPN","GRMN","GS","GT",
+    "HBAN","HD","HLT","HOG","HOLX","HON","HP","HPQ","HRL","HUYA","IAC","IBKR","IBM","IDXX","ILMN",
+    "INCY","INO","INTC","INTU","IRBT","ISRG","J","JNJ","JPM","JWN","KEY","KLAC","KMB","KMX","KO",
+    "LHX","LIN","LLY","LMT","LOW","LRCX","LTHM","LULU","LUMN","LUV","LYFT","MA","MAA","MAC","MAR",
+    "MASI","MAT","MCD","MDB","MDLZ","MDT","MDXG","MELI","META","MGM","MKC","MKTX","MLM","MMM",
+    "MNST","MO","MPC","MRK","MRO","MRVL","MS","MSCI","MSFT","MTCH","MTZ","MU","NEE","NEM","NET",
+    "NFLX","NICE","NKE","NOW","NTAP","NTRS","NVDA","NVO","NVR","NXPI","NXST","OC","OKE","OKTA",
+    "OMC","ORCL","PAAS","PANW","PDD","PEP","PFE","PG","PGR","PH","PINS","PLD","PLNT","PLTR","PM",
+    "PNC","PNR","PODD","POOL","PSO","PXD","PYPL","QCOM","RAD","RBLX","RDFN","RH","RNG","ROKU","RTX",
+    "SBAC","SBUX","SE","SEDG","SFIX","SGEN","SHAK","SHOP","SIRI","SKX","SMAR","SNAP","SNOW","SPLK",
+    "SQ","STT","SWK","SYK","T","TAP","TDG","TDOC","TEAM","TFC","THO","TJX","TMO","TMUS","TRV","TSLA",
+    "TSN","TTD","TWLO","TXN","UAL","UBER","UI","UNH","UNP","UPS","URBN","USB","V","VMW","VZ","W",
+    "WBA","WDAY","WDC","WEN","WFC","WHR","WM","WTW","WWE","WYNN","X","XEL","XOM","YELP","ZG","ZTS"
 ]
 
 def is_market_open(now_utc):
@@ -40,7 +60,7 @@ def check_symbol(sym: str, debug: bool=False):
     """
     # histórico diário: pelo menos 400 dias para SMA200
     df_d = yf.Ticker(sym).history(period="400d", interval="1d", auto_adjust=True)
-    # histórico semanal: pelo menos 5 anos para SMA200 semanal (~260 semanas/ano ×5)
+    # histórico semanal: pelo menos 5 anos para SMA200 semanal
     df_w = yf.Ticker(sym).history(period="5y", interval="1wk", auto_adjust=True)
 
     # calcula médias no diário
