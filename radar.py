@@ -3,7 +3,6 @@ import datetime
 import pandas as pd
 import yfinance as yf
 import requests
-import pandas_market_calendars as mcal
 
 # — Seu TOKEN do Bot e chat_id via Secrets
 TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]
@@ -14,17 +13,17 @@ EMA_FAST = 21
 EMA_MID  = 120
 SMA_LONG = 200
 
-# Lista completa de tickers (sem ATVI, COUP, EVBG)
+# Lista completa de tickers (sem cifrão)
 TICKERS = [
     "AA","AAPL","ABBV","ABNB","ACN","ADBE","ADI","ADP","AEP","AIG","AKAM","AMAT","AMD",
     "AMGN","AMT","AMZN","ANET","ANSS","APPN","APPS","ATR","ATVI","AVGO","AVY","AWK","AXON",
     "AXP","AZO","BA","BAC","BALL","BAX","BB","BBY","BDX","BEN","BF-B","BIDU","BIIB","BILI",
     "BK","BKNG","BLK","BMY","BNS","BRK-B","BSX","BURL","BX","BYD","BYND","BZUN","C","CAT",
     "CB","CBOE","CCI","CHD","CHGG","CHWY","CLX","CM","CMA","CMCSA","CME","CMG","CNC","COP",
-    "COST","CP","CPB","CPRI","CPRT","CRM","CRWD","CSCO","CSX","CTRA","CVNA","CVS","CVX",
+    "COST","COUP","CP","CPB","CPRI","CPRT","CRM","CRWD","CSCO","CSX","CTRA","CVNA","CVS","CVX",
     "CYBR","D","DAL","DAN","DBX","DD","DE","DELL","DG","DHR","DIS","DK","DKNG","DLR","DLTR",
     "DOCU","DT","DUK","DXC","DXCM","EA","EBAY","ECL","ED","EEFT","EIX","EL","ENB","ENPH","EPR",
-    "ETR","ETSY","EXAS","EXPE","F","FANG","FCX","FDX","FHN","FITB","FIVE","FL","FLR",
+    "ETR","ETSY","EVBG","EXAS","EXPE","F","FANG","FCX","FDX","FHN","FITB","FIVE","FL","FLR",
     "FOX","FSLY","FTI","FTNT","GDS","GE","GILD","GM","GOOG","GPN","GRMN","GS","GT",
     "HBAN","HD","HLT","HOG","HOLX","HON","HP","HPQ","HRL","HUYA","IAC","IBKR","IBM","IDXX","ILMN",
     "INCY","INO","INTC","INTU","IRBT","ISRG","J","JNJ","JPM","JWN","KEY","KLAC","KMB","KMX","KO",
@@ -40,20 +39,10 @@ TICKERS = [
     "WBA","WDAY","WDC","WEN","WFC","WHR","WM","WTW","WYNN","X","XEL","XOM","YELP","ZG","ZTS"
 ]
 
-def is_market_open(now_utc):
-    """Verifica se NYSE está aberta no momento UTC dado."""
-    nyse = mcal.get_calendar("NYSE")
-    sched = nyse.schedule(start_date=now_utc.date(), end_date=now_utc.date())
-    if sched.empty:
-        return False
-    open_utc  = sched.iloc[0]["market_open"].tz_convert("UTC")
-    close_utc = sched.iloc[0]["market_close"].tz_convert("UTC")
-    return open_utc <= now_utc <= close_utc
-
 def check_symbol(sym: str):
-    # histórico diário: pelo menos 400 dias para SMA200
+    # histórico diário: 400 dias para SMA200
     df_d = yf.Ticker(sym).history(period="400d", interval="1d", auto_adjust=True)
-    # histórico semanal: pelo menos 5 anos para SMA200 semanal
+    # histórico semanal: 5 anos para SMA200 semanal
     df_w = yf.Ticker(sym).history(period="5y", interval="1wk", auto_adjust=True)
 
     # calcula médias no diário
@@ -91,13 +80,6 @@ def send_telegram(msg: str):
     requests.post(url, json=payload)
 
 def main():
-    now = datetime.datetime.now(datetime.timezone.utc)
-
-    if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
-        if not is_market_open(now):
-            print("Bolsa fechada ou feriado, pulando execução.")
-            return
-
     hits = []
 
     for sym in TICKERS:
@@ -107,6 +89,7 @@ def main():
         except Exception as e:
             print(f"Erro ao processar {sym}: {e}")
 
+    # monta e envia mensagem
     if hits:
         msg = "*🚀 Radar D1 US PDV*\n\n*Sinais de Compra:* " + ", ".join(hits)
     else:
