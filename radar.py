@@ -76,8 +76,14 @@ def check_symbol(sym: str):
 
 def send_telegram(msg: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,        # -1002295022533
+        "message_thread_id": 2,             #  <-- aqui!
+        "text": msg,
+        "parse_mode": "Markdown"
+    }
     requests.post(url, json=payload)
+
 
 def main():
     hits = []
