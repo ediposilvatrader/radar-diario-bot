@@ -6,16 +6,17 @@ import requests
 import pandas_market_calendars as mcal
 
 # — Seu TOKEN do Bot e chat_id via Secrets
-TELEGRAM_TOKEN        = os.environ["TELEGRAM_TOKEN"]
-TELEGRAM_CHAT_ID      = int(os.environ["TELEGRAM_CHAT_ID"])
-TELEGRAM_THREAD_ID    = int(os.environ["TELEGRAM_THREAD_ID"])
+TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]
+TELEGRAM_CHAT_ID = int(os.environ["TELEGRAM_CHAT_ID"])
+# thread_id é opcional: pode não existir como secret
+TELEGRAM_THREAD_ID = os.environ.get("TELEGRAM_THREAD_ID")
 
 # Parâmetros das médias
 EMA_FAST = 21
 EMA_MID  = 120
 SMA_LONG = 200
 
-# Lista completa de tickers (sem cifrão)
+# Lista de tickers (sem ATVI, COUP, EVBG, JWN)
 TICKERS = [
     "AA","AAPL","ABBV","ABNB","ACN","ADBE","ADI","ADP","AEP","AIG","AKAM","AMAT","AMD",
     "AMGN","AMT","AMZN","ANET","ANSS","APPN","APPS","ATR","ATVI","AVGO","AVY","AWK","AXON",
@@ -40,72 +41,56 @@ TICKERS = [
 ]
 
 def is_market_open(now_utc):
-    """Verifica se NYSE está aberta no momento UTC dado."""
     nyse = mcal.get_calendar("NYSE")
     sched = nyse.schedule(start_date=now_utc.date(), end_date=now_utc.date())
     if sched.empty:
         return False
-    open_utc  = sched.iloc[0]["market_open"].tz_convert("UTC")
-    close_utc = sched.iloc[0]["market_close"].tz_convert("UTC")
-    return open_utc <= now_utc <= close_utc
+    o = sched.iloc[0]["market_open"].tz_convert("UTC")
+    c = sched.iloc[0]["market_close"].tz_convert("UTC")
+    return o <= now_utc <= c
 
 def check_symbol(sym: str):
-    """Retorna True se o símbolo bate o padrão de 1 barra de baixa seguida de 3 barras de alta
-    e se o último candle diário e semanal fecharam acima das 3 médias."""
-    # histórico diário (400 dias) e semanal (5 anos)
     df_d = yf.Ticker(sym).history(period="400d", interval="1d", auto_adjust=True)
-    df_w = yf.Ticker(sym).history(period="5y", interval="1wk", auto_adjust=True)
-
-    # calcula médias
+    df_w = yf.Ticker(sym).history(period="5y",  interval="1wk", auto_adjust=True)
     df_d["ema_fast"] = df_d["Close"].ewm(span=EMA_FAST).mean()
     df_d["ema_mid"]  = df_d["Close"].ewm(span=EMA_MID).mean()
     df_d["sma_long"] = df_d["Close"].rolling(window=SMA_LONG).mean()
-
     df_w["ema_fast"] = df_w["Close"].ewm(span=EMA_FAST).mean()
     df_w["ema_mid"]  = df_w["Close"].ewm(span=EMA_MID).mean()
     df_w["sma_long"] = df_w["Close"].rolling(window=SMA_LONG).mean()
 
-    # padrão de barras no diário: 1 de baixa seguida de 3 de alta
-    last4 = df_d.tail(4)
-    o = last4["Open"].values
-    c = last4["Close"].values
-    pattern = (c[0] < o[0] and c[1] > o[1] and c[2] > o[2] and c[3] > o[3])
-
-    # condição de preço acima das médias (último dia e última semana)
-    ld = df_d.iloc[-1]
-    lw = df_w.iloc[-1]
-    cond_d = ld.Close > ld.ema_fast and ld.Close > ld.ema_mid and ld.Close > ld.sma_long
-    cond_w = lw.Close > lw.ema_fast and lw.Close > lw.ema_mid and lw.Close > lw.sma_long
-
+    last4 = df_d.tail(4); o = last4["Open"].values; c = last4["Close"].values
+    pattern = (c[0]<o[0] and c[1]>o[1] and c[2]>o[2] and c[3]>o[3])
+    ld, lw = df_d.iloc[-1], df_w.iloc[-1]
+    cond_d = ld.Close>ld.ema_fast and ld.Close>ld.ema_mid and ld.Close>ld.sma_long
+    cond_w = lw.Close>lw.ema_fast and lw.Close>lw.ema_mid and lw.Close>lw.sma_long
     return pattern and cond_d and cond_w
 
 def send_telegram(msg: str):
-    """Envia mensagem para o Telegram, no tópico correto do grupo."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
-        "message_thread_id": TELEGRAM_THREAD_ID,
         "text": msg,
         "parse_mode": "Markdown"
     }
+    # só inclui thread_id se existir
+    if TELEGRAM_THREAD_ID:
+        payload["message_thread_id"] = int(TELEGRAM_THREAD_ID)
     requests.post(url, json=payload)
 
 def main():
     now = datetime.datetime.now(datetime.timezone.utc)
-
-    # só pular finais de semana/feriados quando agendado por cron
-    if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
-        if not is_market_open(now):
-            print("Bolsa fechada ou feriado, pulando execução.")
-            return
+    if os.environ.get("GITHUB_EVENT_NAME")=="schedule" and not is_market_open(now):
+        print("Bolsa fechada ou feriado, pulando execução.")
+        return
 
     hits = []
-    for sym in TICKERS:
+    for s in TICKERS:
         try:
-            if check_symbol(sym):
-                hits.append(sym)
+            if check_symbol(s):
+                hits.append(s)
         except Exception as e:
-            print(f"Erro ao processar {sym}: {e}")
+            print(f"Erro ao processar {s}: {e}")
 
     if hits:
         msg = "*🚀 Radar D1 US PDV*\n\n*Sinais de Compra:* " + ", ".join(hits)
@@ -114,5 +99,5 @@ def main():
 
     send_telegram(msg)
 
-if __name__ == "__main__":
+if __name__=="__main__":
     main()
