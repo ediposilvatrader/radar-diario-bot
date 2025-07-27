@@ -31,8 +31,8 @@ TICKERS = [
     "ISRG","JNJ","JPM","KEY","KLAC","KMB","KMX","KO","LHX","LIN","LLY","LMT","LOW","LRCX","LULU",
     "LUMN","LUV","MA","MAR","MCD","MDB","MDLZ","MDT","META","MGM","MKC","MMM","MNST","MO","MRK",
     "MRVL","MS","MSCI","MSFT","MTCH","MU","NEE","NET","NFLX","NICE","NKE","NOW","NTAP","NTRS","NVDA","NVO","NVR",
-    "NXPI","OKTA","OMC","ORCL","PANW","PDD","PEP","PFE","PG","PGR","PH","PINS","PLD","PLNT","PLTR","PM",
-    "PNC","PODD","POOL","PSO","PXD","PYPL","QCOM","RAD","RBLX","RDFN","RH","RNG","ROKU","RTX",
+    "NXPI","OKTA","OMC","ORCL","PAAS","PANW","PDD","PEP","PFE","PG","PGR","PH","PINS","PLD","PLNT","PLTR","PM",
+    "PNC","PODD","POOL","PSO","PYPL","QCOM","RAD","RBLX","RDFN","RH","RNG","ROKU","RTX",
     "SBAC","SBUX","SE","SEDG","SFIX","SHAK","SHOP","SIRI","SKX","SNAP","SNOW","SPLK","SQ","STT","SWK","SYK",
     "T","TAP","TDG","TDOC","TEAM","TFC","THO","TJX","TMO","TMUS","TRV","TSLA","TSN","TTD","TWLO","TXN",
     "UAL","UBER","UNH","UNP","UPS","URBN","USB","V","VMW","VZ","W","WBA","WDAY","WDC","WEN","WFC","WHR","WM","WTW","WYNN",
@@ -40,7 +40,6 @@ TICKERS = [
 ]
 
 # Padrões de barras: False = Bear, True = Bull
-# usa as mesmas sequências do H1, mas agora aplicadas a 6 barras semanais
 PATTERNS = [
     [True,  False, False, True,  True,  True],   # BULL BEAR BEAR BULL BULL BULL
     [False, False, True,  False, True,  True],   # BEAR BEAR BULL BEAR BULL BULL
@@ -55,13 +54,12 @@ def is_market_open(now_utc):
     return not sched.empty
 
 def check_symbol_s1(sym: str):
-    # — Operacional: Semanal (últimos ~104 semanas para SMA200)
+    # — Operacional: Semanal (últimas ~2 anos para SMA200 semanal)
     df_w = yf.Ticker(sym).history(period="2y", interval="1wk", auto_adjust=True)
     df_w["ema_fast"] = df_w["Close"].ewm(span=EMA_FAST).mean()
     df_w["ema_mid"]  = df_w["Close"].ewm(span=EMA_MID).mean()
     df_w["sma_long"] = df_w["Close"].rolling(window=SMA_LONG).mean()
 
-    # últimas 6 barras semanais
     last6 = df_w.tail(6)
     bools = [(last6["Close"].iloc[i] > last6["Open"].iloc[i]) for i in range(6)]
     match_op = any(bools == p for p in PATTERNS)
@@ -73,8 +71,8 @@ def check_symbol_s1(sym: str):
         last_w.Close > last_w.sma_long
     )
 
-    # — Viés: Mensal (últimos 400 meses para SMA200 mensal)
-    df_m = yf.Ticker(sym).history(period="400mo", interval="1mo", auto_adjust=True)
+    # — Viés: Mensal (últimos ~20 anos para ≥200 velas mensais)
+    df_m = yf.Ticker(sym).history(period="20y", interval="1mo", auto_adjust=True)
     df_m["ema_fast"] = df_m["Close"].ewm(span=EMA_FAST).mean()
     df_m["ema_mid"]  = df_m["Close"].ewm(span=EMA_MID).mean()
     df_m["sma_long"] = df_m["Close"].rolling(window=SMA_LONG).mean()
@@ -101,7 +99,7 @@ def send_telegram(msg: str):
 
 def main():
     now_utc = datetime.datetime.now(datetime.timezone.utc)
-    if os.environ.get("GITHUB_EVENT_NAME")=="schedule" and not is_market_open(now_utc):
+    if os.environ.get("GITHUB_EVENT_NAME") == "schedule" and not is_market_open(now_utc):
         print("Bolsa fechada ou feriado, pulando execução.")
         return
 
@@ -124,5 +122,5 @@ def main():
 
     send_telegram(msg)
 
-if __name__=="__main__":
+if __name__ == "__main__":
     main()
