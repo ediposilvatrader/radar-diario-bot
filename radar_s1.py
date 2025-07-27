@@ -41,9 +41,6 @@ TICKERS = [
     "X","XEL","XOM","YELP","ZG","ZTS"
 ]
 
-# Símbolos para debug
-DEBUG_SYMBOLS = ["EBAY","LHX","ED","ORLY"]
-
 # Padrões de 6 velas semanais (True=Bull, False=Bear)
 PATTERNS = [
     [ True, False, False,  True,  True,  True],
@@ -58,30 +55,44 @@ def is_market_open(now_utc):
     sched = cal.schedule(start_date=now_utc.date(), end_date=now_utc.date())
     return not sched.empty
 
-def check_symbol_s1(sym: str, debug: bool=False):
-    # Histórico semanal estendido para 5 anos
+def check_symbol_s1(sym: str):
+    # Histórico semanal (5 anos)
     df_w = yf.Ticker(sym).history(period="5y", interval="1wk", auto_adjust=True)
     if len(df_w) < 6:
-        raise ValueError(f"{sym}: histórico semanal insuficiente ({len(df_w)} valores)")
+        return False
     df_w["ema_fast_w"] = df_w["Close"].ewm(span=EMA_FAST).mean()
     df_w["ema_mid_w"]  = df_w["Close"].ewm(span=EMA_MID).mean()
     df_w["sma_long_w"] = df_w["Close"].rolling(window=SMA_LONG).mean()
 
-    # Histórico mensal (20 anos é suficiente para >200 velas)
+    # Histórico mensal (20 anos)
     df_m = yf.Ticker(sym).history(period="20y", interval="1mo", auto_adjust=True)
     if len(df_m) < SMA_LONG:
-        raise ValueError(f"{sym}: histórico mensal insuficiente ({len(df_m)} valores)")
+        return False
     df_m["ema_fast_m"] = df_m["Close"].ewm(span=EMA_FAST).mean()
     df_m["ema_mid_m"]  = df_m["Close"].ewm(span=EMA_MID).mean()
     df_m["sma_long_m"] = df_m["Close"].rolling(window=SMA_LONG).mean()
 
-    # Pattern semanal nas últimas 6
+    # Extrai últimas 6 velas semanais
     last6 = df_w.tail(6)
-    bools = [(last6["Close"].iloc[i] > last6["Open"].iloc[i]) for i in range(6)]
+    opens = last6["Open"].values
+    closes = last6["Close"].values
+
+    # Monta lista de bools com gap-check: para bull exige close>open e close>close_prev
+    bools = []
+    for i in range(6):
+        if closes[i] > opens[i]:
+            if i == 0 or closes[i] > closes[i-1]:
+                bools.append(True)
+            else:
+                bools.append(False)
+        else:
+            bools.append(False)
+
+    # Verifica se casa algum pattern
     match_pattern = any(bools == p for p in PATTERNS)
 
-    # Condição fechamento semanal > médias semanais
-    lw     = df_w.iloc[-1]
+    # Condição: fechamento semanal > médias semanais
+    lw = df_w.iloc[-1]
     cond_w = (
         lw.Close > lw.ema_fast_w and
         lw.Close > lw.ema_mid_w  and
@@ -90,27 +101,17 @@ def check_symbol_s1(sym: str, debug: bool=False):
 
     # Viés mensal: fechamento semanal vs médias mensais
     wm_close = lw.Close
-    lm       = df_m.iloc[-1]
-    cond_m   = (
+    lm = df_m.iloc[-1]
+    cond_m = (
         wm_close > lm.ema_fast_m and
         wm_close > lm.ema_mid_m  and
         wm_close > lm.sma_long_m
     )
 
-    if debug:
-        print(f"\n>>> DEBUG {sym} <<<")
-        print("Semanal (últimas 6 barras O,C):")
-        print(last6[["Open","Close"]])
-        print("Bools:", bools, "Match?", match_pattern)
-        print(f"Semanal Close={lw.Close:.2f} | EMA21w={lw.ema_fast_w:.2f} EMA120w={lw.ema_mid_w:.2f} SMA200w={lw.sma_long_w:.2f}")
-        print("Cond sem?", cond_w)
-        print(f"Viés mensal Close={wm_close:.2f} | EMA21m={lm.ema_fast_m:.2f} EMA120m={lm.ema_mid_m:.2f} SMA200m={lm.sma_long_m:.2f}")
-        print("Cond mes?", cond_m, "\n")
-
     return match_pattern and cond_w and cond_m
 
 def send_telegram(msg: str):
-    url     = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id":    TELEGRAM_CHAT_ID_S1,
         "text":       msg,
@@ -122,20 +123,20 @@ def send_telegram(msg: str):
 def main():
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     if os.environ.get("GITHUB_EVENT_NAME") == "schedule" and not is_market_open(now_utc):
-        print("Bolsa fechada ou feriado, pulando execução.")
-        return
+        return  # pula feriados/fds
 
-    ts  = now_utc.astimezone(datetime.timezone(datetime.timedelta(hours=-3))).strftime("%d/%m/%Y %H:%M")
+    ts = now_utc.astimezone(datetime.timezone(datetime.timedelta(hours=-3))).strftime("%d/%m/%Y %H:%M")
+
     hits = []
     for sym in TICKERS:
         try:
-            if check_symbol_s1(sym, debug=(sym in DEBUG_SYMBOLS)):
+            if check_symbol_s1(sym):
                 hits.append(sym)
-        except Exception as e:
-            print(f"Erro {sym}: {e}")
+        except Exception:
+            continue
 
     if hits:
-        msg = f"*📊 Radar S1 US PDV — {ts}*\n\n*Sinais de Compra:* " + ", ".join(hits)
+        msg = f"*📊 Radar S1 US PDV — {ts}*\n\n*Sinais de Compra:* {', '.join(hits)}"
     else:
         msg = f"*📊 Radar S1 US PDV — {ts}*\n\nNenhum sinal encontrado agora."
 
