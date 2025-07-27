@@ -42,20 +42,21 @@ TICKERS = [
 ]
 
 # Padrões de 6 velas semanais (True=Bull, False=Bear)
-PATTERNS = [
+BUY_PATTERNS = [
     [ True, False, False,  True,  True,  True],
     [False, False,  True, False,  True,  True],
     [False, False,  True,  True,  True,  True],
     [False, False,  True,  True, False,  True],
     [False, False, False,  True,  True,  True],
 ]
+# Inverte cada padrão para venda
+SELL_PATTERNS = [[not b for b in p] for p in BUY_PATTERNS]
 
 def is_market_open(now_utc):
-    cal   = mcal.get_calendar("NYSE")
-    sched = cal.schedule(start_date=now_utc.date(), end_date=now_utc.date())
+    sched = mcal.get_calendar("NYSE").schedule(start_date=now_utc.date(), end_date=now_utc.date())
     return not sched.empty
 
-def check_symbol_s1(sym: str):
+def check_symbol_s1(sym: str, patterns, above: bool):
     # Histórico semanal (5 anos)
     df_w = yf.Ticker(sym).history(period="5y", interval="1wk", auto_adjust=True)
     if len(df_w) < 6:
@@ -77,7 +78,7 @@ def check_symbol_s1(sym: str):
     opens = last6["Open"].values
     closes = last6["Close"].values
 
-    # Monta lista de bools com gap-check: para bull exige close>open e close>close_prev
+    # Monta lista de bools com gap-check
     bools = []
     for i in range(6):
         if closes[i] > opens[i]:
@@ -88,33 +89,32 @@ def check_symbol_s1(sym: str):
         else:
             bools.append(False)
 
-    # Verifica se casa algum pattern
-    match_pattern = any(bools == p for p in PATTERNS)
+    # Verifica padrão
+    if not any(bools == p for p in patterns):
+        return False
 
-    # Condição: fechamento semanal > médias semanais
+    # Condição preço acima/abaixo médias semanais
     lw = df_w.iloc[-1]
-    cond_w = (
-        lw.Close > lw.ema_fast_w and
-        lw.Close > lw.ema_mid_w  and
-        lw.Close > lw.sma_long_w
-    )
+    if above:
+        if not (lw.Close > lw.ema_fast_w and lw.Close > lw.ema_mid_w and lw.Close > lw.sma_long_w):
+            return False
+    else:
+        if not (lw.Close < lw.ema_fast_w and lw.Close < lw.ema_mid_w and lw.Close < lw.sma_long_w):
+            return False
 
     # Viés mensal: fechamento semanal vs médias mensais
     wm_close = lw.Close
     lm = df_m.iloc[-1]
-    cond_m = (
-        wm_close > lm.ema_fast_m and
-        wm_close > lm.ema_mid_m  and
-        wm_close > lm.sma_long_m
-    )
-
-    return match_pattern and cond_w and cond_m
+    if above:
+        return wm_close > lm.ema_fast_m and wm_close > lm.ema_mid_m and wm_close > lm.sma_long_m
+    else:
+        return wm_close < lm.ema_fast_m and wm_close < lm.ema_mid_m and wm_close < lm.sma_long_m
 
 def send_telegram(msg: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
-        "chat_id":    TELEGRAM_CHAT_ID_S1,
-        "text":       msg,
+        "chat_id": TELEGRAM_CHAT_ID_S1,
+        "text": msg,
         "parse_mode": "Markdown",
         **({"message_thread_id": int(TELEGRAM_THREAD_ID_S1)} if TELEGRAM_THREAD_ID_S1 else {})
     }
@@ -122,25 +122,33 @@ def send_telegram(msg: str):
 
 def main():
     now_utc = datetime.datetime.now(datetime.timezone.utc)
-    if os.environ.get("GITHUB_EVENT_NAME") == "schedule" and not is_market_open(now_utc):
-        return  # pula feriados/fds
+    if os.environ.get("GITHUB_EVENT_NAME")=="schedule" and not is_market_open(now_utc):
+        return
 
     ts = now_utc.astimezone(datetime.timezone(datetime.timedelta(hours=-3))).strftime("%d/%m/%Y %H:%M")
 
-    hits = []
+    buys, sells = [], []
     for sym in TICKERS:
         try:
-            if check_symbol_s1(sym):
-                hits.append(sym)
+            if check_symbol_s1(sym, BUY_PATTERNS, above=True):
+                buys.append(sym)
+            if check_symbol_s1(sym, SELL_PATTERNS, above=False):
+                sells.append(sym)
         except Exception:
             continue
 
-    if hits:
-        msg = f"*📊 Radar S1 US PDV — {ts}*\n\n*Sinais de Compra:* {', '.join(hits)}"
+    header = f"*📊 Radar S1 US PDV — {ts}*\n\n"
+    body = ""
+    if buys:
+        body += "*Sinais de Compra:* " + ", ".join(buys) + "\n\n"
     else:
-        msg = f"*📊 Radar S1 US PDV — {ts}*\n\nNenhum sinal encontrado agora."
+        body += "Nenhum sinal de compra.\n\n"
+    if sells:
+        body += "*Sinais de Venda:* " + ", ".join(sells)
+    else:
+        body += "Nenhum sinal de venda."
 
-    send_telegram(msg)
+    send_telegram(header + body)
 
-if __name__ == "__main__":
+if __name__=="__main__":
     main()
