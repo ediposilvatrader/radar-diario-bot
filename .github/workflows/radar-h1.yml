@@ -1,0 +1,32 @@
+name: 🚀 Executar Radar H1 US PDV
+
+on:
+  schedule:
+    # Rodar aos 30 minutos de cada hora de mercado (NY): das 10:30 às 17:30 ET = 13:30–20:30 UTC
+    - cron: '30 13-20 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  run-radar-h1:
+    runs-on: ubuntu-latest
+    env:
+      TELEGRAM_TOKEN:      ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_CHAT_ID_H1: ${{ secrets.TELEGRAM_CHAT_ID_H1 }}
+      TELEGRAM_THREAD_ID_H1: ${{ secrets.TELEGRAM_THREAD_ID_H1 }}
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas yfinance pandas-market-calendars
+
+      - name: Run radar H1 script
+        run: python radar_h1.py
