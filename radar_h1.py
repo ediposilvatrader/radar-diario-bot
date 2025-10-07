@@ -2,7 +2,6 @@ import os
 import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from zoneinfo import ZoneInfo
-
 import pandas as pd
 import yfinance as yf
 import requests
@@ -20,7 +19,9 @@ DEBUG_TICKERS = {t.strip().upper() for t in os.getenv("DEBUG_TICKERS", "").split
 EMA_FAST = 21
 EMA_MID  = 120
 SMA_LONG = 200
-EPS      = 1e-3  # tolerância ~0,001 (0,1%). Ajuste se quiser mais/menos rígido.
+EPS      = 1e-4  # tolerância ~0,01%
+NY  = ZoneInfo("America/New_York")
+BRT = datetime.timezone(datetime.timedelta(hours=-3))
 
 TICKERS = [
     "AIG","AMZN","AAPL","AXP","BA","BAC","BKNG","BLK","C","CAT","COST","CSCO","CVX","DAL",
@@ -29,76 +30,86 @@ TICKERS = [
     "SPOT","T","TSLA","UBER","V","WFC","WMT","XOM"
 ]
 
-NY  = ZoneInfo("America/New_York")
-BRT = datetime.timezone(datetime.timedelta(hours=-3))
-
 # ======== HELPERS ========
 def ema(series: pd.Series, length: int) -> pd.Series:
-    # EMA padrão de trading (igual TV): recursiva, sem 'adjust'
     return series.ewm(span=length, adjust=False, min_periods=length).mean()
 
 def sma(series: pd.Series, length: int) -> pd.Series:
     return series.rolling(window=length, min_periods=length).mean()
 
-def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    df["ema_fast"] = ema(df["Close"], EMA_FAST)
-    df["ema_mid"]  = ema(df["Close"], EMA_MID)
-    df["sma_long"] = sma(df["Close"], SMA_LONG)
-    return df.dropna()
+def _flatten_df(df: pd.DataFrame, sym: str) -> pd.DataFrame:
+    """Garante colunas planas: 'Open','High','Low','Close','Adj Close','Volume'."""
+    if isinstance(df.columns, pd.MultiIndex):
+        # casos: nível 0 = campo OU ticker. Tentamos droplevel/slice seguro.
+        lvl0 = df.columns.get_level_values(0)
+        if {"Open","High","Low","Close"}.issubset(set(lvl0)):
+            df = df.droplevel(-1, axis=1)
+        elif sym in set(lvl0):
+            df = df.xs(sym, axis=1, level=0)
+    return df
 
-def fetch_last_row(sym: str, interval: str, period: str) -> pd.Series | None:
-    """
-    Baixa do Yahoo e retorna a ÚLTIMA linha disponível.
-    Sem filtro de sessão; sem preocupação com vela fechada.
-    """
+def download_yf(sym: str, interval: str, period: str) -> pd.DataFrame:
     df = yf.download(
         sym,
         interval=interval,
         period=period,
-        auto_adjust=True,  # consistente com TV quando se usa closes ajustados
-        prepost=False,     # simples: somente sessão regular quando o Yahoo trouxer
+        auto_adjust=True,
+        prepost=False,
         progress=False,
-        threads=False
+        threads=False,
+        group_by="column",   # <- força colunas planas
     )
     if df.empty:
-        return None
-    # garantir timezone (para log apenas)
+        return df
+    df = _flatten_df(df, sym)
+    # timezone só para logs consistentes
     if df.index.tz is None:
         df.index = df.index.tz_localize("UTC").tz_convert(NY)
     else:
         df.index = df.index.tz_convert(NY)
+    return df
+
+def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    close = pd.to_numeric(df["Close"], errors="coerce")
+    df["ema_fast"] = ema(close, EMA_FAST)
+    df["ema_mid"]  = ema(close, EMA_MID)
+    df["sma_long"] = sma(close, SMA_LONG)
+    return df.dropna()
+
+def last_row_with_indicators(sym: str, interval: str, period: str) -> pd.Series | None:
+    df = download_yf(sym, interval=interval, period=period)
+    if df.empty or "Close" not in df.columns:
+        return None
     df = add_indicators(df)
     if df.empty:
         return None
     return df.iloc[-1]
 
 def above_mas(row: pd.Series) -> bool:
-    """
-    Com tolerância: Close >= EMA21 >= EMA120 e EMA120 >= SMA200.
-    EPS evita falsos negativos quando o preço encosta nas médias.
-    """
-    c, e21, e120, s200 = float(row["Close"]), float(row["ema_fast"]), float(row["ema_mid"]), float(row["sma_long"])
+    # Usa .item() para evitar FutureWarning do pandas
+    c    = float(row.at["Close"])
+    e21  = float(row.at["ema_fast"])
+    e120 = float(row.at["ema_mid"])
+    s200 = float(row.at["sma_long"])
     return (c + EPS >= e21) and (e21 + EPS >= e120) and (e120 + EPS >= s200)
 
 def check_symbol(sym: str) -> tuple[bool, str]:
-    # H1
-    h1 = fetch_last_row(sym, interval="60m", period="180d")
+    h1 = last_row_with_indicators(sym, "60m", "180d")
     if h1 is None:
         return False, "sem_h1"
     h1_ok = above_mas(h1)
 
-    # D1
-    d1 = fetch_last_row(sym, interval="1d", period="400d")
+    d1 = last_row_with_indicators(sym, "1d", "400d")
     if d1 is None:
         return False, "sem_d1"
     d1_ok = above_mas(d1)
 
-    if DEBUG and (sym in DEBUG_TICKERS or not DEBUG_TICKERS):
+    if DEBUG and (not DEBUG_TICKERS or sym in DEBUG_TICKERS):
         try:
             print(f"[{sym}] H1 {h1.name.strftime('%Y-%m-%d %H:%M NY')}  "
-                  f"Close={h1['Close']:.3f}  EMA21={h1['ema_fast']:.3f}  EMA120={h1['ema_mid']:.3f}  SMA200={h1['sma_long']:.3f}  -> {h1_ok}")
+                  f"C={h1['Close']:.3f}  E21={h1['ema_fast']:.3f}  E120={h1['ema_mid']:.3f}  S200={h1['sma_long']:.3f} -> {h1_ok}")
             print(f"[{sym}] D1 {d1.name.strftime('%Y-%m-%d')}         "
-                  f"Close={d1['Close']:.3f}  EMA21={d1['ema_fast']:.3f}  EMA120={d1['ema_mid']:.3f}  SMA200={d1['sma_long']:.3f}  -> {d1_ok}")
+                  f"C={d1['Close']:.3f}  E21={d1['ema_fast']:.3f}  E120={d1['ema_mid']:.3f}  S200={d1['sma_long']:.3f} -> {d1_ok}")
         except Exception:
             pass
 
@@ -120,7 +131,6 @@ def send_telegram(text: str):
         pass
 
 def main():
-    # permite depurar só alguns tickers, se quiser
     tickers = TICKERS if not DEBUG_TICKERS else [t for t in TICKERS if t in DEBUG_TICKERS]
 
     hits, fails = [], []
@@ -129,24 +139,20 @@ def main():
         for f in as_completed(futs):
             t = futs[f]
             ok, reason = f.result()
-            if ok:
-                hits.append(t)
-            else:
-                fails.append((t, reason))
+            if ok: hits.append(t)
+            else:  fails.append((t, reason))
 
     hits.sort()
     ts_brt = datetime.datetime.now(BRT).strftime("%d/%m/%Y %H:%M")
     msg = (
         f"*🔎 Radar H1/D1 — {ts_brt} (BRT)*\n"
-        f"*Critério:* Close ≥ EMA21 ≥ EMA120 ≥ SMA200 (H1 **e** D1, com ε={EPS})\n\n"
+        f"*Critério:* Close ≥ EMA21 ≥ EMA120 ≥ SMA200 (H1 **e** D1)\n\n"
         f"*Passaram:* {', '.join(hits) if hits else '—'}"
     )
     print(msg)
-    send_telegram(msg)
-
     if DEBUG:
-        print("Falhas resumidas:", fails)
+        print("Falhas:", fails)
+    send_telegram(msg)
 
 if __name__ == "__main__":
     main()
-
