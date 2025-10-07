@@ -2,31 +2,40 @@ name: 🚀 Executar Radar H1 US PDV
 
 on:
   schedule:
-    # Fecha de cada candle H1 no horário de 10:30–16:30 ET (14:30–20:30 UTC)
-    - cron: '30 14-20 * * 1-5'
-  workflow_dispatch:  # mantém o botão “Run workflow” para testes manuais
+    - cron: "31 * * * 1-5"   # dispara todo hora às :31 UTC, seg–sex
+  workflow_dispatch: {}      # rodar manualmente quando quiser
 
 jobs:
-  run-radar-h1:
+  run:
     runs-on: ubuntu-latest
-    env:
-      TELEGRAM_TOKEN:        ${{ secrets.TELEGRAM_TOKEN }}
-      TELEGRAM_CHAT_ID_H1:   ${{ secrets.TELEGRAM_CHAT_ID_H1 }}
-      TELEGRAM_THREAD_ID_H1: ${{ secrets.TELEGRAM_THREAD_ID_H1 }}
-
+    timeout-minutes: 5
+    concurrency:
+      group: radar-h1
+      cancel-in-progress: true
     steps:
-      - name: Check out code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: "3.11"
+          cache: "pip"
 
-      - name: Install dependencies
+      # Guarda de janela: só segue se for 10–16h em Nova York
+      - name: Check New York window (10:31–16:31 NY)
         run: |
-          python -m pip install --upgrade pip
-          pip install requests pandas yfinance pandas-market-calendars
+          NY_HOUR=$(TZ=America/New_York date +%H)
+          NY_MIN=$(TZ=America/New_York date +%M)
+          if [ "$NY_MIN" != "31" ] || [ "$NY_HOUR" -lt 10 ] || [ "$NY_HOUR" -gt 16 ]; then
+            echo "Fora da janela NY: $NY_HOUR:$NY_MIN — encerrando."
+            exit 0
+          fi
+          echo "Dentro da janela NY: $NY_HOUR:$NY_MIN — executando radar."
+
+      - run: pip install --no-cache-dir yfinance pandas requests
 
       - name: Run radar H1 script
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID_H1: ${{ secrets.TELEGRAM_CHAT_ID_H1 }}
+          TELEGRAM_THREAD_ID_H1: ${{ secrets.TELEGRAM_THREAD_ID_H1 }}
         run: python radar_h1.py
