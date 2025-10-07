@@ -1,35 +1,21 @@
 import os
-import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from zoneinfo import ZoneInfo
 import pandas as pd
 import yfinance as yf
 import requests
 
-# ================== SECRETS ==================
+# ===== SECRETS =====
 TELEGRAM_TOKEN        = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID_H1   = int(os.environ["TELEGRAM_CHAT_ID_H1"])
 TELEGRAM_THREAD_ID_H1 = os.environ.get("TELEGRAM_THREAD_ID_H1")
 
-# ================== DEBUG ===================
-# pode ligar debug geral por env: DEBUG=1
-# e restringir por env: DEBUG_TICKERS=PLTR,AIG
-DEBUG = os.getenv("DEBUG", "0") == "1"
-DEBUG_TICKERS = {t.strip().upper() for t in os.getenv("DEBUG_TICKERS", "").split(",")} - {""}
-# sempre debugar PLTR e AIG
-FORCE_DEBUG_TICKERS = {"PLTR", "AIG"}
-
-# ================ PARÂMETROS ================
+# ===== PARÂMETROS =====
 EMA_FAST = 21
 EMA_MID  = 120
 SMA_LONG = 200
-
 # tolerância para “encostou na média”
-EPS_ABS = 0.02    # US$ 0,02
-EPS_REL = 0.001   # 0,10%
-
-NY  = ZoneInfo("America/New_York")
-BRT = datetime.timezone(datetime.timedelta(hours=-3))
+EPS_ABS = 0.02   # US$ 0,02
+EPS_REL = 0.001  # 0,10%
 
 TICKERS = [
     "AIG","AMZN","AAPL","AXP","BA","BAC","BKNG","BLK","C","CAT","COST","CSCO","CVX","DAL",
@@ -38,33 +24,18 @@ TICKERS = [
     "SPOT","T","TSLA","UBER","V","WFC","WMT","XOM"
 ]
 
-# ================ HELPERS ===================
-def ema(series: pd.Series, length: int) -> pd.Series:
-    # EMA estilo TradingView: recursiva, sem adjust, com min_periods
-    return series.ewm(span=length, adjust=False, min_periods=length).mean()
+# ===== FUNÇÕES =====
+def ema(s: pd.Series, n: int) -> pd.Series:
+    return s.ewm(span=n, adjust=False, min_periods=n).mean()
 
-def sma(series: pd.Series, length: int) -> pd.Series:
-    return series.rolling(window=length, min_periods=length).mean()
+def sma(s: pd.Series, n: int) -> pd.Series:
+    return s.rolling(window=n, min_periods=n).mean()
 
-def fetch_history(sym: str, interval: str, period: str) -> pd.DataFrame:
-    """Ticker().history evita MultiIndex; pega a última barra disponível da sessão regular."""
+def fetch_last(sym: str, interval: str, period: str) -> pd.Series | None:
     df = yf.Ticker(sym).history(
-        period=period,
-        interval=interval,
-        auto_adjust=False,   # deixe False (preço 'cru'); mude p/ True se quiser ajustado
-        prepost=False,
-        actions=False,
+        period=period, interval=interval,
+        auto_adjust=False, prepost=False, actions=False
     )
-    if df.empty:
-        return df
-    if df.index.tz is None:
-        df.index = df.index.tz_localize("UTC").tz_convert(NY)
-    else:
-        df.index = df.index.tz_convert(NY)
-    return df
-
-def last_row_with_indicators(sym: str, interval: str, period: str) -> pd.Series | None:
-    df = fetch_history(sym, interval, period)
     if df.empty or "Close" not in df.columns:
         return None
     close = pd.to_numeric(df["Close"], errors="coerce")
@@ -74,80 +45,31 @@ def last_row_with_indicators(sym: str, interval: str, period: str) -> pd.Series 
         "ema_mid":  ema(close, EMA_MID),
         "sma_long": sma(close, SMA_LONG),
     }).dropna()
-    if out.empty:
-        return None
-    return out.iloc[-1]
+    return None if out.empty else out.iloc[-1]
 
-def tol(a: float, b: float) -> bool:
-    """a >= b com tolerância absoluta/relativa (evita reprovar por centavos)."""
+def tol_ge(a: float, b: float) -> bool:
     t = max(EPS_ABS, abs(b) * EPS_REL)
     return a + t >= b
 
-# >>> NOVO CRITÉRIO: Close acima de CADA média (sem exigir ordem entre as médias) <<<
 def close_above_all(row: pd.Series) -> bool:
     c    = float(row.at["Close"])
     e21  = float(row.at["ema_fast"])
     e120 = float(row.at["ema_mid"])
     s200 = float(row.at["sma_long"])
-    return tol(c, e21) and tol(c, e120) and tol(c, s200)
+    return tol_ge(c, e21) and tol_ge(c, e120) and tol_ge(c, s200)
 
-def _should_debug(sym: str) -> bool:
-    return DEBUG or (sym in FORCE_DEBUG_TICKERS) or (sym in DEBUG_TICKERS)
-
-def check_symbol(sym: str) -> tuple[bool, dict]:
-    info: dict = {"sym": sym}
-
-    # H1
-    h1 = last_row_with_indicators(sym, "60m", "180d")
-    if h1 is None:
-        info["h1"] = "sem_dados"
-        return False, info
-    h1_vals = {
-        "time":  h1.name.strftime("%Y-%m-%d %H:%M NY"),
-        "close": float(h1["Close"]),
-        "ema21": float(h1["ema_fast"]),
-        "ema120": float(h1["ema_mid"]),
-        "sma200": float(h1["sma_long"]),
-    }
-    h1_ok = close_above_all(h1)
-    info["h1"] = {"ok": h1_ok, **h1_vals}
-
-    # D1
-    d1 = last_row_with_indicators(sym, "1d", "400d")
-    if d1 is None:
-        info["d1"] = "sem_dados"
-        return False, info
-    d1_vals = {
-        "time":  d1.name.strftime("%Y-%m-%d"),
-        "close": float(d1["Close"]),
-        "ema21": float(d1["ema_fast"]),
-        "ema120": float(d1["ema_mid"]),
-        "sma200": float(d1["sma_long"]),
-    }
-    d1_ok = close_above_all(d1)
-    info["d1"] = {"ok": d1_ok, **d1_vals}
-
-    if _should_debug(sym):
-        try:
-            print(f"[{sym}] H1 {h1_vals['time']}  "
-                  f"C={h1_vals['close']:.4f}  E21={h1_vals['ema21']:.4f}  "
-                  f"E120={h1_vals['ema120']:.4f}  S200={h1_vals['sma200']:.4f}  -> {h1_ok}")
-            print(f"[{sym}] D1 {d1_vals['time']}       "
-                  f"C={d1_vals['close']:.4f}  E21={d1_vals['ema21']:.4f}  "
-                  f"E120={d1_vals['ema120']:.4f}  S200={d1_vals['sma200']:.4f}  -> {d1_ok}")
-        except Exception:
-            pass
-
-    return (h1_ok and d1_ok), info
+def passes(sym: str) -> bool:
+    h1 = fetch_last(sym, "60m", "180d")
+    if h1 is None or not close_above_all(h1):
+        return False
+    d1 = fetch_last(sym, "1d", "400d")
+    if d1 is None or not close_above_all(d1):
+        return False
+    return True
 
 def send_telegram(text: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID_H1,
-        "text": text,
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": True,
-    }
+    payload = {"chat_id": TELEGRAM_CHAT_ID_H1, "text": text, "disable_web_page_preview": True}
     if TELEGRAM_THREAD_ID_H1:
         payload["message_thread_id"] = int(TELEGRAM_THREAD_ID_H1)
     try:
@@ -155,39 +77,16 @@ def send_telegram(text: str):
     except Exception:
         pass
 
-# ================== MAIN =====================
 def main():
-    hits, details = [], []
-
+    hits = []
     with ThreadPoolExecutor(max_workers=min(12, len(TICKERS))) as ex:
-        futs = {ex.submit(check_symbol, t): t for t in TICKERS}
+        futs = {ex.submit(passes, t): t for t in TICKERS}
         for f in as_completed(futs):
-            ok, info = f.result()
-            details.append(info)
-            if ok:
-                hits.append(info["sym"])
-
+            if f.result():
+                hits.append(futs[f])
     hits.sort()
-
-    # Mensagem no formato solicitado
     msg = "Radar Pressão H1 - Sinais de Compra\n\nAções: " + (", ".join(hits) if hits else "—")
-    print(msg)
     send_telegram(msg)
-
-    # Resumo focado em PLTR e AIG (sempre aparece no log)
-    for sym in ("PLTR", "AIG"):
-        for info in details:
-            if info.get("sym") == sym:
-                h1 = info.get("h1")
-                d1 = info.get("d1")
-                if isinstance(h1, dict) and isinstance(d1, dict):
-                    print(
-                        f"[RESUMO {sym}] "
-                        f"H1 ok={h1['ok']}  C={h1['close']:.4f} E21={h1['ema21']:.4f} E120={h1['ema120']:.4f} S200={h1['sma200']:.4f}  |  "
-                        f"D1 ok={d1['ok']}  C={d1['close']:.4f} E21={d1['ema21']:.4f} E120={d1['ema120']:.4f} S200={d1['sma200']:.4f}"
-                    )
-                else:
-                    print(f"[RESUMO {sym}] dados insuficientes (h1={h1}, d1={d1})")
 
 if __name__ == "__main__":
     main()
