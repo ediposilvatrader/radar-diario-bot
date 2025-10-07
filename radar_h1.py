@@ -19,7 +19,10 @@ DEBUG_TICKERS = {t.strip().upper() for t in os.getenv("DEBUG_TICKERS", "").split
 EMA_FAST = 21
 EMA_MID  = 120
 SMA_LONG = 200
-EPS      = 1e-4  # tolerância para "encostou na média" (~0,01%)
+
+# tolerância para “encostou na média”
+EPS_ABS = 0.02     # US$ 0,02
+EPS_REL = 0.001    # 0,10%
 
 NY  = ZoneInfo("America/New_York")
 BRT = datetime.timezone(datetime.timedelta(hours=-3))
@@ -33,27 +36,24 @@ TICKERS = [
 
 # ======== HELPERS ========
 def ema(series: pd.Series, length: int) -> pd.Series:
-    # mesma fórmula do TV
+    # EMA padrão (igual TradingView): recursiva, sem 'adjust'
     return series.ewm(span=length, adjust=False, min_periods=length).mean()
 
 def sma(series: pd.Series, length: int) -> pd.Series:
     return series.rolling(window=length, min_periods=length).mean()
 
 def fetch_history(sym: str, interval: str, period: str) -> pd.DataFrame:
-    """
-    Usa Ticker().history para evitar MultiIndex.
-    Última barra disponível (sem pré/pós).
-    """
+    """Usa Ticker().history para evitar MultiIndex e pegar a última barra disponível."""
     df = yf.Ticker(sym).history(
         period=period,
         interval=interval,
-        auto_adjust=False,   # mude para True se preferir preços ajustados
+        auto_adjust=False,   # deixe False para preços crus; mude para True se preferir ajustados
         prepost=False,
-        actions=False
+        actions=False,
     )
     if df.empty:
         return df
-    # timezone para log consistente
+    # timezone para logs consistentes
     if df.index.tz is None:
         df.index = df.index.tz_localize("UTC").tz_convert(NY)
     else:
@@ -65,21 +65,27 @@ def last_row_with_indicators(sym: str, interval: str, period: str) -> pd.Series 
     if df.empty or "Close" not in df.columns:
         return None
     close = pd.to_numeric(df["Close"], errors="coerce")
-    e21   = ema(close, EMA_FAST)
-    e120  = ema(close, EMA_MID)
-    s200  = sma(close, SMA_LONG)
-    out = pd.DataFrame({"Close": close, "ema_fast": e21, "ema_mid": e120, "sma_long": s200}).dropna()
+    out = pd.DataFrame({
+        "Close":    close,
+        "ema_fast": ema(close, EMA_FAST),
+        "ema_mid":  ema(close, EMA_MID),
+        "sma_long": sma(close, SMA_LONG),
+    }).dropna()
     if out.empty:
         return None
     return out.iloc[-1]
 
+def gte_tol(a: float, b: float) -> bool:
+    """a >= b com tolerância absoluta/relativa (para não reprovar por centavos)."""
+    tol = max(EPS_ABS, abs(b) * EPS_REL)
+    return a + tol >= b
+
 def above_mas(row: pd.Series) -> bool:
-    # usa .at[...] e float(...) em escalares
     c    = float(row.at["Close"])
     e21  = float(row.at["ema_fast"])
     e120 = float(row.at["ema_mid"])
     s200 = float(row.at["sma_long"])
-    return (c + EPS >= e21) and (e21 + EPS >= e120) and (e120 + EPS >= s200)
+    return gte_tol(c, e21) and gte_tol(e21, e120) and gte_tol(e120, s200)
 
 def check_symbol(sym: str) -> tuple[bool, str]:
     # H1
@@ -87,7 +93,6 @@ def check_symbol(sym: str) -> tuple[bool, str]:
     if h1 is None:
         return False, "sem_h1"
     h1_ok = above_mas(h1)
-
     # D1
     d1 = last_row_with_indicators(sym, "1d", "400d")
     if d1 is None:
@@ -123,25 +128,20 @@ def send_telegram(text: str):
 def main():
     tickers = TICKERS if not DEBUG_TICKERS else [t for t in TICKERS if t in DEBUG_TICKERS]
 
-    hits, fails = [], []
+    hits = []
     with ThreadPoolExecutor(max_workers=min(12, len(tickers))) as ex:
         futs = {ex.submit(check_symbol, t): t for t in tickers}
         for f in as_completed(futs):
             t = futs[f]
-            ok, reason = f.result()
-            if ok: hits.append(t)
-            else:  fails.append((t, reason))
+            ok, _ = f.result()
+            if ok:
+                hits.append(t)
 
     hits.sort()
-    ts_brt = datetime.datetime.now(BRT).strftime("%d/%m/%Y %H:%M")
-    msg = (
-        f"*🔎 Radar H1/D1 — {ts_brt} (BRT)*\n"
-        f"*Critério:* Close ≥ EMA21 ≥ EMA120 ≥ SMA200 (H1 **e** D1)\n\n"
-        f"*Passaram:* {', '.join(hits) if hits else '—'}"
-    )
+
+    # *** Mensagem no formato solicitado ***
+    msg = "Radar Pressão H1 - Sinais de Compra\n\nAções: " + (", ".join(hits) if hits else "—")
     print(msg)
-    if DEBUG:
-        print("Falhas:", fails)
     send_telegram(msg)
 
 if __name__ == "__main__":
