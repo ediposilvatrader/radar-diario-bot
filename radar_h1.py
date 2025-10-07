@@ -26,18 +26,9 @@ TICKERS = [
     "SPOT","T","TSLA","UBER","V","WFC","WMT","XOM"
 ]
 
-# Padrões de barras: False = Bear, True = Bull (para as 6 últimas velas FECHADAS)
-PATTERNS = [
-    [True,  False, False, True,  True,  True],   # BULL BEAR BEAR BULL BULL BULL
-    [False, False, True,  False, True,  True],   # BEAR BEAR BULL BEAR BULL BULL
-    [False, False, True,  True,  True,  True],   # BEAR BEAR BULL BULL BULL BULL
-    [False, False, True,  True,  False, True],   # BEAR BEAR BULL BULL BEAR BULL
-    [False, False, False, True,  True,  True],   # BEAR BEAR BEAR BULL BULL BULL
-]
-
 # ======== TIMEZONES ========
 NY  = ZoneInfo("America/New_York")
-BRT = datetime.timezone(datetime.timedelta(hours=-3))  # Brasilia
+BRT = datetime.timezone(datetime.timedelta(hours=-3))  # Brasília
 
 # ======== UTIL ========
 def now_ny() -> datetime.datetime:
@@ -52,13 +43,15 @@ def is_market_open_nyse(now_utc: datetime.datetime) -> bool:
 def last_closed_h1_start_ts_ny(ts_ny: datetime.datetime) -> datetime.datetime:
     """
     Retorna o TIMESTAMP DE ABERTURA da última vela H1 FECHADA em NY.
-    No TV a vela fecha em :30; no yfinance o índice é a HORA DE ABERTURA.
-    Ex.: se agora 15:47 NY, a vela fechada foi 14:30–15:30; índice = 14:30.
+    No TradingView a H1 fecha em :30; no yfinance o índice é a HORA DE ABERTURA.
+    Ex.: se agora 16:46 BRT (15:46 NY), a última fechada foi 15:30–16:30 NY,
+    cujo índice é 15:30 NY → start_ts = 15:30.
     """
     minute_block_close = 30 if ts_ny.minute >= 30 else 0
     close_ts = ts_ny.replace(minute=minute_block_close, second=0, microsecond=0)
     if ts_ny.minute < 30:
         close_ts -= datetime.timedelta(minutes=30)
+    # última fechada = bloco que acabou de fechar
     start_ts = close_ts - datetime.timedelta(hours=1)
     return start_ts
 
@@ -70,10 +63,11 @@ def prep_intraday(df: pd.DataFrame) -> pd.DataFrame:
         df = df.tz_localize("UTC").tz_convert(NY)
     else:
         df = df.tz_convert(NY)
+    # session regular
     return df.between_time("09:30", "16:00")
 
 def fetch_h1(sym: str) -> pd.DataFrame:
-    # Período longo pra SMA200 H1 ficar estável
+    """Baixa H1 com período longo para estabilizar SMA200."""
     df = yf.download(
         sym, interval="60m", period="180d",
         auto_adjust=True, prepost=False, progress=False, threads=False
@@ -89,6 +83,7 @@ def fetch_h1(sym: str) -> pd.DataFrame:
     return df
 
 def fetch_d1(sym: str) -> pd.DataFrame:
+    """Baixa D1 para confirmar tendência maior."""
     df = yf.download(
         sym, interval="1d", period="400d",
         auto_adjust=True, prepost=False, progress=False, threads=False
@@ -101,49 +96,39 @@ def fetch_d1(sym: str) -> pd.DataFrame:
     df = df.dropna()
     return df
 
-def check_symbol_h1(sym: str, start_ts: datetime.datetime) -> bool:
-    """
-    Lógica PDV-H1:
-      - Pega somentes velas FECHADAS até start_ts (abertura da última fechada)
-      - Padrões nas 6 últimas velas fechadas
-      - Close acima de EMA21 > EMA120 > SMA200 (H1)
-      - Confirmação D1 idêntica (Close > EMA21 > EMA120 > SMA200)
-    """
-    df_h1 = fetch_h1(sym)
-    if df_h1.empty:
-        return False
-
-    # Toma somente velas <= start_ts (garante vela fechada)
-    df_up_to = df_h1.loc[:start_ts]
-    if df_up_to.empty or len(df_up_to) < 6:
-        return False
-
-    # Linha da última vela H1 FECHADA
-    row_h1 = df_up_to.iloc[-1]
-
-    # Padrões nas 6 últimas velas FECHADAS
-    last6 = df_up_to.tail(6)
-    bools = (last6["Close"] > last6["Open"]).astype(bool).tolist()
-    match_pattern = any(bools == p for p in PATTERNS)
-
-    cond_h1 = (
-        row_h1["Close"] > row_h1["ema_fast"] > row_h1["ema_mid"] and
-        row_h1["ema_mid"] > row_h1["sma_long"]
+def above_mas(row: pd.Series) -> bool:
+    """Close > EMA21 > EMA120 > SMA200."""
+    return (
+        row["Close"] > row["ema_fast"] > row["ema_mid"] and
+        row["ema_mid"] > row["sma_long"]
     )
 
-    if not (match_pattern and cond_h1):
+def check_symbol(sym: str, start_ts: datetime.datetime) -> bool:
+    """
+    Critério:
+      - H1 (última vela FECHADA até start_ts): Close > EMA21 > EMA120 > SMA200
+      - D1 (último candle diário fechado):      Close > EMA21 > EMA120 > SMA200
+    """
+    # H1
+    df_h1 = fetch_h1(sym)
+    if df_h1.empty:
+        # sem dados suficientes
         return False
 
-    # Só busca D1 se passou no H1 (economiza tempo)
+    # pega somente velas FECHADAS até 'start_ts' (índice H1 = horário de ABERTURA)
+    df_up_to = df_h1.loc[:start_ts]
+    if df_up_to.empty:
+        return False
+    row_h1 = df_up_to.iloc[-1]
+    if not above_mas(row_h1):
+        return False
+
+    # D1 (só busca se H1 passou, pra ser mais rápido)
     df_d1 = fetch_d1(sym)
     if df_d1.empty:
         return False
-    last_d1 = df_d1.iloc[-1]
-    cond_d1 = (
-        last_d1["Close"] > last_d1["ema_fast"] > last_d1["ema_mid"] and
-        last_d1["ema_mid"] > last_d1["sma_long"]
-    )
-    return cond_d1
+    row_d1 = df_d1.iloc[-1]
+    return above_mas(row_d1)
 
 def send_telegram(text: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -156,7 +141,7 @@ def send_telegram(text: str):
     if TELEGRAM_THREAD_ID_H1:
         payload["message_thread_id"] = int(TELEGRAM_THREAD_ID_H1)
 
-    # tenta algumas vezes se der erro transitório
+    # pequena robustez a erro transitório
     for _ in range(3):
         try:
             r = requests.post(url, json=payload, timeout=10)
@@ -172,15 +157,15 @@ def main():
         print("NYSE fechada/feriado — pulando execução.")
         return
 
-    ts_ny   = now_ny()
-    start_ts = last_closed_h1_start_ts_ny(ts_ny)   # abertura da última H1 fechada
-    close_ts = start_ts + datetime.timedelta(hours=1)  # horário de FECHAMENTO da vela
+    ts_ny    = now_ny()
+    start_ts = last_closed_h1_start_ts_ny(ts_ny)              # ABERTURA da última H1 FECHADA
+    close_ts = start_ts + datetime.timedelta(hours=1)         # FECHAMENTO da última H1
 
-    # Paraleliza a varredura para acelerar (ajuste max_workers conforme gosto)
-    hits = []
-    errors = []
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        futures = {ex.submit(check_symbol_h1, sym, start_ts): sym for sym in TICKERS}
+    # Varredura paralela (rápido)
+    hits, errors = [], []
+    max_workers = min(12, len(TICKERS))
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {ex.submit(check_symbol, sym, start_ts): sym for sym in TICKERS}
         for fut in as_completed(futures):
             sym = futures[fut]
             try:
@@ -189,22 +174,24 @@ def main():
             except Exception as e:
                 errors.append((sym, str(e)))
 
-    hits.sort()  # ordena alfabeticamente só pra ficar bonito
+    hits.sort()
 
-    # Monta mensagem
-    ts_brt_str = now_utc.astimezone(BRT).strftime("%d/%m/%Y %H:%M")
+    # Mensagem clara com horários BRT/NY
+    ts_brt_str       = now_utc.astimezone(BRT).strftime("%d/%m/%Y %H:%M")
     close_ts_str_ny  = close_ts.strftime("%H:%M")
+    close_ts_str_brt = close_ts.astimezone(BRT).strftime("%H:%M")
     start_ts_str_ny  = start_ts.strftime("%H:%M")
-    header = f"*⏰ Radar H1 US PDV — {ts_brt_str} (BRT)*\n" \
-             f"_Vela H1 fechada em {close_ts_str_ny} NY (índice {start_ts_str_ny})_"
-    if hits:
-        body = f"\n\n*Sinais de Compra:* {', '.join(hits)}"
-    else:
-        body = f"\n\nNenhum sinal encontrado agora."
+
+    header = (
+        f"*⏰ Radar H1 US PDV — {ts_brt_str} (BRT)*\n"
+        f"_Vela H1 FECHADA: {close_ts_str_brt} BRT ({close_ts_str_ny} NY) • "
+        f"Índice H1 usado: {start_ts_str_ny} NY_"
+    )
+    body = f"\n\n*Ações acima das MAs (H1 e D1):* {', '.join(hits) if hits else '—'}"
 
     send_telegram(header + body)
 
-    # Log básico pro Actions
+    # Logs pro Actions
     print(header)
     print("HITS:", hits)
     if errors:
