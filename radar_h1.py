@@ -12,13 +12,11 @@ TELEGRAM_CHAT_ID_H1   = int(os.environ["TELEGRAM_CHAT_ID_H1"])
 TELEGRAM_THREAD_ID_H1 = os.environ.get("TELEGRAM_THREAD_ID_H1")
 
 # ================== DEBUG ===================
-# você pode ligar debug geral por env:
-#   DEBUG=1
-# e restringir tickers:
-#   DEBUG_TICKERS=PLTR,AIG
+# pode ligar debug geral por env: DEBUG=1
+# e restringir por env: DEBUG_TICKERS=PLTR,AIG
 DEBUG = os.getenv("DEBUG", "0") == "1"
 DEBUG_TICKERS = {t.strip().upper() for t in os.getenv("DEBUG_TICKERS", "").split(",")} - {""}
-# sempre debugar PLTR e AIG (como você pediu)
+# sempre debugar PLTR e AIG
 FORCE_DEBUG_TICKERS = {"PLTR", "AIG"}
 
 # ================ PARÂMETROS ================
@@ -42,24 +40,23 @@ TICKERS = [
 
 # ================ HELPERS ===================
 def ema(series: pd.Series, length: int) -> pd.Series:
-    # EMA igual TradingView: recursiva, sem adjust, com min_periods
+    # EMA estilo TradingView: recursiva, sem adjust, com min_periods
     return series.ewm(span=length, adjust=False, min_periods=length).mean()
 
 def sma(series: pd.Series, length: int) -> pd.Series:
     return series.rolling(window=length, min_periods=length).mean()
 
 def fetch_history(sym: str, interval: str, period: str) -> pd.DataFrame:
-    """Usa Ticker().history para evitar MultiIndex e pegar a última barra disponível."""
+    """Ticker().history evita MultiIndex; pega a última barra disponível da sessão regular."""
     df = yf.Ticker(sym).history(
         period=period,
         interval=interval,
-        auto_adjust=False,   # deixe False (preço 'cru'); mude para True se preferir ajustado
+        auto_adjust=False,   # deixe False (preço 'cru'); mude p/ True se quiser ajustado
         prepost=False,
         actions=False,
     )
     if df.empty:
         return df
-    # timezone (apenas para log ficar coerente)
     if df.index.tz is None:
         df.index = df.index.tz_localize("UTC").tz_convert(NY)
     else:
@@ -81,17 +78,18 @@ def last_row_with_indicators(sym: str, interval: str, period: str) -> pd.Series 
         return None
     return out.iloc[-1]
 
-def gte_tol(a: float, b: float) -> bool:
-    """a >= b com tolerância absoluta/relativa."""
-    tol = max(EPS_ABS, abs(b) * EPS_REL)
-    return a + tol >= b
+def tol(a: float, b: float) -> bool:
+    """a >= b com tolerância absoluta/relativa (evita reprovar por centavos)."""
+    t = max(EPS_ABS, abs(b) * EPS_REL)
+    return a + t >= b
 
-def above_mas(row: pd.Series) -> bool:
+# >>> NOVO CRITÉRIO: Close acima de CADA média (sem exigir ordem entre as médias) <<<
+def close_above_all(row: pd.Series) -> bool:
     c    = float(row.at["Close"])
     e21  = float(row.at["ema_fast"])
     e120 = float(row.at["ema_mid"])
     s200 = float(row.at["sma_long"])
-    return gte_tol(c, e21) and gte_tol(e21, e120) and gte_tol(e120, s200)
+    return tol(c, e21) and tol(c, e120) and tol(c, s200)
 
 def _should_debug(sym: str) -> bool:
     return DEBUG or (sym in FORCE_DEBUG_TICKERS) or (sym in DEBUG_TICKERS)
@@ -105,13 +103,13 @@ def check_symbol(sym: str) -> tuple[bool, dict]:
         info["h1"] = "sem_dados"
         return False, info
     h1_vals = {
-        "time": h1.name.strftime("%Y-%m-%d %H:%M NY"),
+        "time":  h1.name.strftime("%Y-%m-%d %H:%M NY"),
         "close": float(h1["Close"]),
         "ema21": float(h1["ema_fast"]),
         "ema120": float(h1["ema_mid"]),
         "sma200": float(h1["sma_long"]),
     }
-    h1_ok = above_mas(h1)
+    h1_ok = close_above_all(h1)
     info["h1"] = {"ok": h1_ok, **h1_vals}
 
     # D1
@@ -120,16 +118,15 @@ def check_symbol(sym: str) -> tuple[bool, dict]:
         info["d1"] = "sem_dados"
         return False, info
     d1_vals = {
-        "time": d1.name.strftime("%Y-%m-%d"),
+        "time":  d1.name.strftime("%Y-%m-%d"),
         "close": float(d1["Close"]),
         "ema21": float(d1["ema_fast"]),
         "ema120": float(d1["ema_mid"]),
         "sma200": float(d1["sma_long"]),
     }
-    d1_ok = above_mas(d1)
+    d1_ok = close_above_all(d1)
     info["d1"] = {"ok": d1_ok, **d1_vals}
 
-    # debug obrigatório para PLTR/AIG + opcional via env
     if _should_debug(sym):
         try:
             print(f"[{sym}] H1 {h1_vals['time']}  "
@@ -172,13 +169,12 @@ def main():
 
     hits.sort()
 
-    # === Mensagem no formato solicitado ===
+    # Mensagem no formato solicitado
     msg = "Radar Pressão H1 - Sinais de Compra\n\nAções: " + (", ".join(hits) if hits else "—")
     print(msg)
     send_telegram(msg)
 
-    # Se quiser ver por que PLTR/AIG não entraram, os prints acima já mostram.
-    # Mas deixo um resumo final focado nelas:
+    # Resumo focado em PLTR e AIG (sempre aparece no log)
     for sym in ("PLTR", "AIG"):
         for info in details:
             if info.get("sym") == sym:
