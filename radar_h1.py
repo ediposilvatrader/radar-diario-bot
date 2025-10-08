@@ -13,7 +13,7 @@ TELEGRAM_THREAD_ID_H1 = os.environ.get("TELEGRAM_THREAD_ID_H1")
 EMA_FAST = 21
 EMA_MID  = 120
 SMA_LONG = 200
-# tolerância para “encostou na média”
+# tolerância p/ “encostou na média”
 EPS_ABS = 0.02   # US$ 0,02
 EPS_REL = 0.001  # 0,10%
 
