@@ -1,4 +1,5 @@
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import yfinance as yf
@@ -68,14 +69,31 @@ def passes(sym: str) -> bool:
     return True
 
 def send_telegram(text: str):
+    """Envia mensagem e LOGA status/erros. Tenta 3x com backoff; se falhar, levanta exceção."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID_H1, "text": text, "disable_web_page_preview": True}
     if TELEGRAM_THREAD_ID_H1:
         payload["message_thread_id"] = int(TELEGRAM_THREAD_ID_H1)
-    try:
-        requests.post(url, json=payload, timeout=10)
-    except Exception:
-        pass
+
+    last_err = None
+    for i in range(3):
+        try:
+            r = requests.post(url, json=payload, timeout=10)
+            ok = False
+            try:
+                ok = (r.status_code == 200) and r.json().get("ok", False)
+            except Exception:
+                pass
+            if ok:
+                print(f"[Telegram] OK (tentativa {i+1})")
+                return
+            print(f"[Telegram] Falha (tentativa {i+1}): {r.status_code} {r.text}")
+            last_err = f"{r.status_code} {r.text}"
+        except Exception as e:
+            print(f"[Telegram] Erro (tentativa {i+1}): {e}")
+            last_err = str(e)
+        time.sleep(2 * (i + 1))
+    raise RuntimeError(f"Falha ao enviar mensagem ao Telegram: {last_err}")
 
 def main():
     hits = []
@@ -85,7 +103,9 @@ def main():
             if f.result():
                 hits.append(futs[f])
     hits.sort()
+
     msg = "Radar Pressão H1 - Sinais de Compra\n\nAções: " + (", ".join(hits) if hits else "—")
+    print(f"[Radar] {len(hits)} tickers: {', '.join(hits) if hits else '—'}")
     send_telegram(msg)
 
 if __name__ == "__main__":
