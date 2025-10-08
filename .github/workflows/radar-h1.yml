@@ -1,42 +1,67 @@
 name: 🚀 Executar Radar H1 US PDV
 
 on:
-  schedule:
-    - cron: "31 * * * 1-5"   # dispara todo hora às :31 UTC (a guarda abaixo garante 10:31–16:31 NY)
-  workflow_dispatch: {}      # permite rodar manualmente
+  # tenta iniciar de :27 até :35 (UTC) nas horas que costumam cobrir 10–16 NY
+  - cron: "27-35 14-20 * * 1-5"
+  workflow_dispatch: {}
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 8
     concurrency:
       group: radar-h1
       cancel-in-progress: true
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"    # <- sem cache (resolve o erro que você viu)
+          python-version: "3.11"
 
-      # Guarda de janela: só executa às 10:31–16:31 no fuso de Nova York
-      - name: Check New York window (10:31–16:31 NY)
+      # Mira 10:31–16:31 de Nova York.
+      # Se começar entre :27–:31, espera até :31 (+ GRACE segundos).
+      # Se começar entre :32–:35, roda mesmo assim (tolerância).
+      - name: Check New York window (target :31 NY)
         id: window
         shell: bash
+        env:
+          GRACE_SEC: "10"   # ajuste se quiser esperar um pouco mais após :31 (ex.: 15–20s)
         run: |
           NY_HOUR=$(TZ=America/New_York date +%H)
           NY_MIN=$(TZ=America/New_York date +%M)
-          echo "ny_hour=$NY_HOUR" >> $GITHUB_OUTPUT
-          echo "ny_min=$NY_MIN"   >> $GITHUB_OUTPUT
-          if [ "$NY_MIN" = "31" ] && [ "$NY_HOUR" -ge 10 ] && [ "$NY_HOUR" -le 16 ]; then
-            echo "run=true"  >> $GITHUB_OUTPUT
-          else
+          NY_SEC=$(TZ=America/New_York date +%S)
+          echo "NY now: ${NY_HOUR}:${NY_MIN}:${NY_SEC}"
+
+          # Válido só entre 10h e 16h NY
+          if [ "$NY_HOUR" -lt 10 ] || [ "$NY_HOUR" -gt 16 ]; then
             echo "run=false" >> $GITHUB_OUTPUT
+            exit 0
           fi
-          echo "NY time: ${NY_HOUR}:${NY_MIN}"
+
+          # :27–:31 -> espera até :31:00 + GRACE
+          if [ "$NY_MIN" -ge 27 ] && [ "$NY_MIN" -le 31 ]; then
+            # segundos até :31:00
+            WAIT=$(( (31 - NY_MIN)*60 - NY_SEC ))
+            # acrescenta a folga (GRACE)
+            WAIT=$(( WAIT + ${GRACE_SEC} ))
+            if [ $WAIT -gt 0 ]; then
+              echo "Aguardando ${WAIT}s para executar no :31 NY (+${GRACE_SEC}s)."
+              sleep $WAIT
+            fi
+            echo "run=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # :32–:35 -> ainda roda (tolerância)
+          if [ "$NY_MIN" -ge 32 ] && [ "$NY_MIN" -le 35 ]; then
+            echo "run=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Fora do intervalo útil
+          echo "run=false" >> $GITHUB_OUTPUT
 
       - name: Install deps
         if: steps.window.outputs.run == 'true'
