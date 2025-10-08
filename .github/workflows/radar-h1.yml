@@ -2,38 +2,48 @@ name: 🚀 Executar Radar H1 US PDV
 
 on:
   schedule:
-    - cron: "31 * * * 1-5"   # dispara todo hora às :31 UTC, seg–sex
-  workflow_dispatch: {}      # rodar manualmente quando quiser
+    - cron: "31 * * * 1-5"   # dispara todo hora às :31 UTC (a guarda abaixo garante 10:31–16:31 NY)
+  workflow_dispatch: {}      # permite rodar manualmente
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 6
     concurrency:
       group: radar-h1
       cancel-in-progress: true
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-          cache: "pip"
+          python-version: "3.11"    # <- sem cache (resolve o erro que você viu)
 
-      # Guarda de janela: só segue se for 10–16h em Nova York
+      # Guarda de janela: só executa às 10:31–16:31 no fuso de Nova York
       - name: Check New York window (10:31–16:31 NY)
+        id: window
+        shell: bash
         run: |
           NY_HOUR=$(TZ=America/New_York date +%H)
           NY_MIN=$(TZ=America/New_York date +%M)
-          if [ "$NY_MIN" != "31" ] || [ "$NY_HOUR" -lt 10 ] || [ "$NY_HOUR" -gt 16 ]; then
-            echo "Fora da janela NY: $NY_HOUR:$NY_MIN — encerrando."
-            exit 0
+          echo "ny_hour=$NY_HOUR" >> $GITHUB_OUTPUT
+          echo "ny_min=$NY_MIN"   >> $GITHUB_OUTPUT
+          if [ "$NY_MIN" = "31" ] && [ "$NY_HOUR" -ge 10 ] && [ "$NY_HOUR" -le 16 ]; then
+            echo "run=true"  >> $GITHUB_OUTPUT
+          else
+            echo "run=false" >> $GITHUB_OUTPUT
           fi
-          echo "Dentro da janela NY: $NY_HOUR:$NY_MIN — executando radar."
+          echo "NY time: ${NY_HOUR}:${NY_MIN}"
 
-      - run: pip install --no-cache-dir yfinance pandas requests
+      - name: Install deps
+        if: steps.window.outputs.run == 'true'
+        run: pip install --no-cache-dir yfinance pandas requests
 
       - name: Run radar H1 script
+        if: steps.window.outputs.run == 'true'
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID_H1: ${{ secrets.TELEGRAM_CHAT_ID_H1 }}
