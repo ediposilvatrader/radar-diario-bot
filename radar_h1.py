@@ -59,13 +59,42 @@ def close_above_all(row: pd.Series) -> bool:
     s200 = float(row.at["sma_long"])
     return tol_ge(c, e21) and tol_ge(c, e120) and tol_ge(c, s200)
 
+def last_n_positive_h1(sym: str, n: int = 3) -> bool:
+    """
+    Verifica se as N últimas velas fechadas do H1 são positivas (Close > Open).
+    """
+    df = yf.Ticker(sym).history(
+        period="10d", interval="60m",
+        auto_adjust=False, prepost=False, actions=False
+    )
+    if df.empty or "Open" not in df.columns or "Close" not in df.columns:
+        return False
+
+    o = pd.to_numeric(df["Open"], errors="coerce")
+    c = pd.to_numeric(df["Close"], errors="coerce")
+
+    sub = pd.DataFrame({"Open": o, "Close": c}).dropna()
+    if len(sub) < n:
+        return False
+
+    last = sub.iloc[-n:]
+    return bool((last["Close"] > last["Open"]).all())
+
 def passes(sym: str) -> bool:
+    # Filtro das médias no H1
     h1 = fetch_last(sym, "60m", "180d")
     if h1 is None or not close_above_all(h1):
         return False
+
+    # Filtro das médias no diário
     d1 = fetch_last(sym, "1d", "400d")
     if d1 is None or not close_above_all(d1):
         return False
+
+    # ===== NOVO FILTRO: 3 últimas velas fechadas do H1 positivas =====
+    if not last_n_positive_h1(sym, 3):
+        return False
+
     return True
 
 def send_telegram(text: str):
