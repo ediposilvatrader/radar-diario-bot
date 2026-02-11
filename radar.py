@@ -1,17 +1,21 @@
 import os
 import datetime
-import pandas as pd
 import yfinance as yf
 import requests
-import pandas_market_calendars as mcal
+import pandas as pd
 
 # — Seu TOKEN do Bot e chat_id via Secrets
 TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-# Parâmetros das médias (NOVO)
+# =========================
+# CONFIGURAÇÕES
+# =========================
 EMA_FAST = 20     # EMA 20
 SMA_LONG = 200    # SMA 200
+
+EXCLUIR_EARNINGS = True
+EARNINGS_LOOKAHEAD_DIAS = 15  # próximos 15 dias
 
 # Lista completa de tickers, sem o "ATVI"
 TICKERS = [
@@ -39,36 +43,87 @@ TICKERS = [
     "X","XEL","XOM","YELP","ZG","ZTS"
 ]
 
+def send_telegram(msg: str):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
+    requests.post(url, json=payload, timeout=20)
+
+def get_next_earnings_date(ticker: yf.Ticker):
+    """
+    Tenta obter a próxima data de earnings (resultados) via yfinance.
+    Retorna um datetime.date ou None se não encontrar.
+    """
+    try:
+        # Traz um pequeno calendário futuro/próximo; nem todo ticker retorna.
+        edf = ticker.get_earnings_dates(limit=8)
+        if edf is None or edf.empty:
+            return None
+
+        # O índice costuma ser a data do evento (Timestamp)
+        dates = []
+        for idx in edf.index:
+            try:
+                ts = pd.Timestamp(idx)
+                dates.append(ts.date())
+            except Exception:
+                pass
+
+        if not dates:
+            return None
+
+        today = datetime.date.today()
+        future = sorted([d for d in dates if d >= today])
+        return future[0] if future else None
+
+    except Exception:
+        return None
+
+def should_exclude_by_earnings(ticker: yf.Ticker, lookahead_days: int) -> bool:
+    """
+    Exclui se houver earnings nos próximos lookahead_days.
+    """
+    next_e = get_next_earnings_date(ticker)
+    if next_e is None:
+        return False  # se não tem dado, não exclui
+
+    today = datetime.date.today()
+    limit = today + datetime.timedelta(days=lookahead_days)
+    return today <= next_e <= limit
+
 def check_symbol(sym: str) -> bool:
-    # Diário: precisa de pelo menos 200 candles
-    df_d = yf.Ticker(sym).history(period="450d", interval="1d", auto_adjust=True)
-    # Semanal: 5 anos dá de sobra pra SMA 200 semanal (200 semanas ~ 4 anos)
-    df_w = yf.Ticker(sym).history(period="7y", interval="1wk", auto_adjust=True)
+    ticker = yf.Ticker(sym)
+
+    # 1) FILTRO DE EARNINGS (antes de baixar histórico pesado)
+    if EXCLUIR_EARNINGS:
+        if should_exclude_by_earnings(ticker, EARNINGS_LOOKAHEAD_DIAS):
+            return False
+
+    # 2) HISTÓRICO D1 / W1
+    df_d = ticker.history(period="450d", interval="1d", auto_adjust=True)
+    df_w = ticker.history(period="7y", interval="1wk", auto_adjust=True)
 
     if df_d.empty or df_w.empty:
         return False
 
-    # Médias D1
+    # Médias no D1
     df_d["ema20"]  = df_d["Close"].ewm(span=EMA_FAST, adjust=False).mean()
     df_d["sma200"] = df_d["Close"].rolling(window=SMA_LONG).mean()
 
-    # Médias W1
+    # Médias no W1
     df_w["ema20"]  = df_w["Close"].ewm(span=EMA_FAST, adjust=False).mean()
     df_w["sma200"] = df_w["Close"].rolling(window=SMA_LONG).mean()
 
     ld = df_d.iloc[-1]
     lw = df_w.iloc[-1]
 
-    # Condição: acima das duas no D1 e no W1
+    # Condições: acima das médias no D1 e W1
     cond_d = (ld["Close"] > ld["ema20"]) and (ld["Close"] > ld["sma200"])
     cond_w = (lw["Close"] > lw["ema20"]) and (lw["Close"] > lw["sma200"])
 
-    return bool(cond_d and cond_w)
+    # Condição extra: último candle diário positivo
+    cond_d_pos = (ld["Close"] > ld["Open"])
 
-def send_telegram(msg: str):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
-    requests.post(url, json=payload, timeout=20)
+    return bool(cond_d and cond_w and cond_d_pos)
 
 def main():
     hoje = datetime.datetime.now(datetime.timezone.utc).astimezone(
@@ -85,13 +140,13 @@ def main():
         except Exception:
             pass
 
+    filtro_earn = f" | Sem earnings ≤{EARNINGS_LOOKAHEAD_DIAS}d" if EXCLUIR_EARNINGS else ""
+    titulo = f"*🚀 Radar D1/W1 — EMA20 + SMA200 & Candle D1 Positivo ({hoje})*{filtro_earn}\n\n"
+
     if hits:
-        msg = (
-            f"*🚀 Radar D1/W1 — Acima da EMA20 e SMA200 ({hoje})*\n\n"
-            f"*Ativos filtrados:* {', '.join(hits)}"
-        )
+        msg = titulo + f"*Ativos filtrados:* {', '.join(hits)}"
     else:
-        msg = f"*🚀 Radar D1/W1 — Acima da EMA20 e SMA200 ({hoje})*\n\nNenhum ativo no filtro hoje."
+        msg = titulo + "Nenhum ativo no filtro hoje."
 
     send_telegram(msg)
 
