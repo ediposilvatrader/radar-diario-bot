@@ -9,10 +9,9 @@ import pandas_market_calendars as mcal
 TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-# Parâmetros das médias
-EMA_FAST = 21
-EMA_MID  = 120
-SMA_LONG = 200
+# Parâmetros das médias (NOVO)
+EMA_FAST = 20     # EMA 20
+SMA_LONG = 200    # SMA 200
 
 # Lista completa de tickers, sem o "ATVI"
 TICKERS = [
@@ -40,37 +39,36 @@ TICKERS = [
     "X","XEL","XOM","YELP","ZG","ZTS"
 ]
 
-def is_market_open(now_utc):
-    nyse = mcal.get_calendar("NYSE")
-    sched = nyse.schedule(start_date=now_utc.date(), end_date=now_utc.date())
-    return not sched.empty
+def check_symbol(sym: str) -> bool:
+    # Diário: precisa de pelo menos 200 candles
+    df_d = yf.Ticker(sym).history(period="450d", interval="1d", auto_adjust=True)
+    # Semanal: 5 anos dá de sobra pra SMA 200 semanal (200 semanas ~ 4 anos)
+    df_w = yf.Ticker(sym).history(period="7y", interval="1wk", auto_adjust=True)
 
-def check_symbol(sym: str):
-    df_d = yf.Ticker(sym).history(period="400d", interval="1d", auto_adjust=True)
-    df_w = yf.Ticker(sym).history(period="5y", interval="1wk", auto_adjust=True)
+    if df_d.empty or df_w.empty:
+        return False
 
-    df_d["ema_fast"] = df_d["Close"].ewm(span=EMA_FAST).mean()
-    df_d["ema_mid"]  = df_d["Close"].ewm(span=EMA_MID).mean()
-    df_d["sma_long"] = df_d["Close"].rolling(window=SMA_LONG).mean()
+    # Médias D1
+    df_d["ema20"]  = df_d["Close"].ewm(span=EMA_FAST, adjust=False).mean()
+    df_d["sma200"] = df_d["Close"].rolling(window=SMA_LONG).mean()
 
-    df_w["ema_fast"] = df_w["Close"].ewm(span=EMA_FAST).mean()
-    df_w["ema_mid"]  = df_w["Close"].ewm(span=EMA_MID).mean()
-    df_w["sma_long"] = df_w["Close"].rolling(window=SMA_LONG).mean()
+    # Médias W1
+    df_w["ema20"]  = df_w["Close"].ewm(span=EMA_FAST, adjust=False).mean()
+    df_w["sma200"] = df_w["Close"].rolling(window=SMA_LONG).mean()
 
-    last4 = df_d.tail(4)
-    o, c = last4["Open"].values, last4["Close"].values
-    pattern = (c[0]<o[0] and c[1]>o[1] and c[2]>o[2] and c[3]>o[3])
+    ld = df_d.iloc[-1]
+    lw = df_w.iloc[-1]
 
-    ld, lw = df_d.iloc[-1], df_w.iloc[-1]
-    cond_d = (ld.Close>ld.ema_fast and ld.Close>ld.ema_mid and ld.Close>ld.sma_long)
-    cond_w = (lw.Close>lw.ema_fast and lw.Close>lw.ema_mid and lw.Close>lw.sma_long)
+    # Condição: acima das duas no D1 e no W1
+    cond_d = (ld["Close"] > ld["ema20"]) and (ld["Close"] > ld["sma200"])
+    cond_w = (lw["Close"] > lw["ema20"]) and (lw["Close"] > lw["sma200"])
 
-    return pattern and cond_d and cond_w
+    return bool(cond_d and cond_w)
 
 def send_telegram(msg: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
-    requests.post(url, json=payload)
+    requests.post(url, json=payload, timeout=20)
 
 def main():
     hoje = datetime.datetime.now(datetime.timezone.utc).astimezone(
@@ -84,13 +82,16 @@ def main():
         try:
             if check_symbol(sym):
                 hits.append(sym)
-        except:
+        except Exception:
             pass
 
     if hits:
-        msg = f"*🚀 Radar D1 US PDV — Sinais do dia: {hoje}*\n\n*Sinais de Compra:* {', '.join(hits)}"
+        msg = (
+            f"*🚀 Radar D1/W1 — Acima da EMA20 e SMA200 ({hoje})*\n\n"
+            f"*Ativos filtrados:* {', '.join(hits)}"
+        )
     else:
-        msg = f"*🚀 Radar D1 US PDV — Sinais do dia: {hoje}*\n\nNenhum sinal encontrado hoje."
+        msg = f"*🚀 Radar D1/W1 — Acima da EMA20 e SMA200 ({hoje})*\n\nNenhum ativo no filtro hoje."
 
     send_telegram(msg)
 
