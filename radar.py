@@ -14,8 +14,12 @@ TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 EMA_FAST = 20     # EMA 20
 SMA_LONG = 200    # SMA 200
 
+# Filtro de earnings
 EXCLUIR_EARNINGS = True
 EARNINGS_LOOKAHEAD_DIAS = 15  # próximos 15 dias
+
+# Filtro de preço mínimo (USD)
+PRECO_MIN_USD = 50.0
 
 # Lista completa de tickers, sem o "ATVI"
 TICKERS = [
@@ -48,23 +52,26 @@ def send_telegram(msg: str):
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
     requests.post(url, json=payload, timeout=20)
 
+def safe_float(x):
+    try:
+        return float(x)
+    except Exception:
+        return None
+
 def get_next_earnings_date(ticker: yf.Ticker):
     """
-    Tenta obter a próxima data de earnings (resultados) via yfinance.
+    Tenta obter a próxima data de earnings via yfinance.
     Retorna um datetime.date ou None se não encontrar.
     """
     try:
-        # Traz um pequeno calendário futuro/próximo; nem todo ticker retorna.
         edf = ticker.get_earnings_dates(limit=8)
         if edf is None or edf.empty:
             return None
 
-        # O índice costuma ser a data do evento (Timestamp)
         dates = []
         for idx in edf.index:
             try:
-                ts = pd.Timestamp(idx)
-                dates.append(ts.date())
+                dates.append(pd.Timestamp(idx).date())
             except Exception:
                 pass
 
@@ -74,29 +81,60 @@ def get_next_earnings_date(ticker: yf.Ticker):
         today = datetime.date.today()
         future = sorted([d for d in dates if d >= today])
         return future[0] if future else None
-
     except Exception:
         return None
 
 def should_exclude_by_earnings(ticker: yf.Ticker, lookahead_days: int) -> bool:
-    """
-    Exclui se houver earnings nos próximos lookahead_days.
-    """
     next_e = get_next_earnings_date(ticker)
     if next_e is None:
-        return False  # se não tem dado, não exclui
+        return False  # sem dado => não exclui
 
     today = datetime.date.today()
     limit = today + datetime.timedelta(days=lookahead_days)
     return today <= next_e <= limit
 
+def get_last_price_usd(ticker: yf.Ticker):
+    """
+    Pega o último preço (regularMarketPrice) quando disponível.
+    Fallback: último Close do histórico diário.
+    """
+    try:
+        info = ticker.fast_info if hasattr(ticker, "fast_info") else None
+        if info and "last_price" in info and info["last_price"] is not None:
+            return safe_float(info["last_price"])
+    except Exception:
+        pass
+
+    try:
+        info2 = ticker.info
+        p = info2.get("regularMarketPrice")
+        if p is not None:
+            return safe_float(p)
+    except Exception:
+        pass
+
+    try:
+        df = ticker.history(period="10d", interval="1d", auto_adjust=True)
+        if df is not None and not df.empty:
+            return safe_float(df["Close"].iloc[-1])
+    except Exception:
+        pass
+
+    return None
+
 def check_symbol(sym: str) -> bool:
     ticker = yf.Ticker(sym)
 
-    # 1) FILTRO DE EARNINGS (antes de baixar histórico pesado)
-    if EXCLUIR_EARNINGS:
-        if should_exclude_by_earnings(ticker, EARNINGS_LOOKAHEAD_DIAS):
-            return False
+    # 0) FILTRO DE PREÇO MÍNIMO
+    last_price = get_last_price_usd(ticker)
+    if last_price is None:
+        return False  # sem preço confiável, ignora
+    if last_price < PRECO_MIN_USD:
+        return False
+
+    # 1) FILTRO DE EARNINGS (antes do histórico pesado)
+    if EXCLUIR_EARNINGS and should_exclude_by_earnings(ticker, EARNINGS_LOOKAHEAD_DIAS):
+        return False
 
     # 2) HISTÓRICO D1 / W1
     df_d = ticker.history(period="450d", interval="1d", auto_adjust=True)
@@ -140,8 +178,13 @@ def main():
         except Exception:
             pass
 
-    filtro_earn = f" | Sem earnings ≤{EARNINGS_LOOKAHEAD_DIAS}d" if EXCLUIR_EARNINGS else ""
-    titulo = f"*🚀 Radar D1/W1 — EMA20 + SMA200 & Candle D1 Positivo ({hoje})*{filtro_earn}\n\n"
+    tags = []
+    tags.append(f"Preço≥${PRECO_MIN_USD:g}")
+    if EXCLUIR_EARNINGS:
+        tags.append(f"Sem earnings ≤{EARNINGS_LOOKAHEAD_DIAS}d")
+    tag_txt = " | ".join(tags)
+
+    titulo = f"*🚀 Radar D1/W1 — EMA20+SMA200 & D1 Positivo ({hoje})*\n_{tag_txt}_\n\n"
 
     if hits:
         msg = titulo + f"*Ativos filtrados:* {', '.join(hits)}"
