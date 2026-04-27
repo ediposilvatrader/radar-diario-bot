@@ -1,9 +1,12 @@
-name: 🚀 Executar Radar D1 US PDV
+name: Radar Diário
 
 on:
   schedule:
-    # 45 21 UTC → 18:45 BRT, segunda a sexta
-    - cron: '45 21 * * 1-5'
+    # 21:30 UTC = 18:30 BRT (UTC-3)
+    # Formato cron: minuto hora dia mês dia-da-semana
+    - cron: "30 21 * * 1-5"   # segunda a sexta (dias úteis da bolsa)
+
+  # Permite rodar manualmente pelo GitHub para testar
   workflow_dispatch:
 
 jobs:
@@ -11,22 +14,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out code
+      - name: Confira o código
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: Configurar Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: "3.11"
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          # <-- adicionamos o pandas_market_calendars aqui
-          pip install requests pandas yfinance pandas_market_calendars
+      - name: Dependências de instalação
+        run: pip install yfinance requests pandas
 
-      - name: Run radar script
+      - name: Executar script de radar
         env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python radar.py
