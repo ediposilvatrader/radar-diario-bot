@@ -21,9 +21,9 @@ EARNINGS_LOOKAHEAD_DIAS = 15
 
 PRECO_MIN_USD = 50.0
 
-# Padrão das últimas 5 barras FECHADAS no D1
+# Padrão das últimas 4 barras FECHADAS no D1
 # False = bear (close < open) | True = bull (close > open)
-PADRAO_BARRAS = [False, False, True, True, True]  # bear, bear, bull, bull, bull
+PADRAO_BARRAS = [False, True, True, True]  # bear, bull, bull, bull
 
 TICKERS = [
     "AA","AAPL","ABBV","ABNB","ACN","ADBE","ADI","ADP","AEP","AIG","AKAM","AMAT","AMD",
@@ -163,16 +163,23 @@ def check_symbol(sym: str) -> bool:
     if not (cond_d and cond_w):
         return False
 
-    # Padrão das últimas 5 barras FECHADAS (exclui candle atual)
-    if len(df_d) < 6:
+    # Padrão das últimas 4 barras FECHADAS (exclui candle atual)
+    if len(df_d) < 5:
         return False
 
-    ultimas_5 = df_d.iloc[-6:-1]  # 5 barras fechadas mais recentes
+    ultimas_4 = df_d.iloc[-5:-1]  # 4 barras fechadas mais recentes
 
-    for i, (_, row) in enumerate(ultimas_5.iterrows()):
+    # 1) Verificar direção de cada barra (bear/bull)
+    for i, (_, row) in enumerate(ultimas_4.iterrows()):
         esperado_bull = PADRAO_BARRAS[i]
         real_bull     = row["Close"] > row["Open"]
         if real_bull != esperado_bull:
+            return False
+
+    # 2) Verificar fechamentos crescentes (cada close > close da barra anterior)
+    closes = ultimas_4["Close"].values  # [bar1, bar2, bar3, bar4]
+    for i in range(1, len(closes)):
+        if closes[i] <= closes[i - 1]:
             return False
 
     return True
@@ -202,12 +209,12 @@ def main():
     tag_txt = (
         f"Preço≥${PRECO_MIN_USD:g} | "
         f"EMA21 + EMA120 + SMA200 (D1 e W1) | "
-        f"Padrão: 🔴🔴🟢🟢🟢"
+        f"Padrão: 🔴🟢🟢🟢 + closes crescentes"
         + (f" | Sem earnings ≤{EARNINGS_LOOKAHEAD_DIAS}d" if EXCLUIR_EARNINGS else "")
     )
 
     titulo = (
-        f"*🚀 Radar D1/W1 — 3 Médias + Bear/Bear/Bull/Bull/Bull*\n"
+        f"*🚀 Radar D1/W1 — 3 Médias + Bear/Bull/Bull/Bull (closes crescentes)*\n"
         f"_{hoje}_\n"
         f"_{tag_txt}_\n\n"
     )
