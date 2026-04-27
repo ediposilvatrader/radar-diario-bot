@@ -195,19 +195,16 @@ def main():
         except Exception as e:
             print(f"  ⚠️  {sym}: {e}")
 
-    tag_txt = (
-        f"Preço≥${PRECO_MIN_USD:g} | "
-        f"EMA21 + EMA120 + SMA200 (D1 e W1) | "
-        f"Padrão: 🔴🟢🟢🟢 + closes crescentes"
-    )
-
-    titulo = (
-        f"*🚀 Radar D1/W1 — 3 Médias + Bear/Bull/Bull/Bull (closes crescentes)*\n"
-        f"_{hoje}_\n"
-        f"_{tag_txt}_\n\n"
-    )
-
-    msg = titulo + (f"*Ativos com sinal:* {', '.join(hits)}" if hits else "_Nenhum ativo com sinal hoje._")
+    if hits:
+        msg = (
+            f"*Radar 3WS Diário — {hoje}*\n\n"
+            f"*Sinais:* {', '.join(hits)}"
+        )
+    else:
+        msg = (
+            f"*Radar 3WS Diário — {hoje}*\n\n"
+            f"Nenhum sinal hoje."
+        )
     send_telegram(msg)
     print(f"\n[{hoje}] Finalizado. {len(hits)} sinal(is) enviado(s).")
 
