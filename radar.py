@@ -16,14 +16,17 @@ EMA_FAST  = 21
 EMA_MID   = 120
 SMA_LONG  = 200
 
-EXCLUIR_EARNINGS        = True
-EARNINGS_LOOKAHEAD_DIAS = 15
-
 PRECO_MIN_USD = 50.0
 
 # Padrão das últimas 4 barras FECHADAS no D1
 # False = bear (close < open) | True = bull (close > open)
 PADRAO_BARRAS = [False, True, True, True]  # bear, bull, bull, bull
+
+# Horário de fechamento do mercado americano em UTC
+# NYSE/NASDAQ fecha às 21:00 UTC (16:00 ET / 20:00 UTC com horário de verão EUA)
+# Usamos 21:00 UTC como referência segura — o radar roda às 21:30 UTC (18:30 BRT)
+# então o mercado JÁ está fechado e a última barra D1 está 100% fechada
+MERCADO_FECHA_UTC = datetime.time(21, 0)
 
 TICKERS = [
     "AA","AAPL","ABBV","ABNB","ACN","ADBE","ADI","ADP","AEP","AIG","AKAM","AMAT","AMD",
@@ -68,29 +71,14 @@ def safe_float(x):
     except Exception:
         return None
 
-def get_next_earnings_date(ticker: yf.Ticker):
-    try:
-        edf = ticker.get_earnings_dates(limit=8)
-        if edf is None or edf.empty:
-            return None
-        today = datetime.date.today()
-        dates = []
-        for idx in edf.index:
-            try:
-                dates.append(pd.Timestamp(idx).date())
-            except Exception:
-                pass
-        future = sorted([d for d in dates if d >= today])
-        return future[0] if future else None
-    except Exception:
-        return None
-
-def should_exclude_by_earnings(ticker: yf.Ticker, lookahead_days: int) -> bool:
-    next_e = get_next_earnings_date(ticker)
-    if next_e is None:
-        return False
-    today = datetime.date.today()
-    return today <= next_e <= today + datetime.timedelta(days=lookahead_days)
+def mercado_fechado() -> bool:
+    """
+    Retorna True se o mercado americano já fechou hoje (após 21:00 UTC).
+    O radar roda às 21:30 UTC (18:30 BRT), então sempre será True em produção.
+    Mantido aqui para deixar a lógica explícita caso alguém rode manualmente.
+    """
+    agora_utc = datetime.datetime.now(datetime.timezone.utc).time()
+    return agora_utc >= MERCADO_FECHA_UTC
 
 def get_last_price_usd(ticker: yf.Ticker):
     try:
@@ -121,11 +109,7 @@ def check_symbol(sym: str) -> bool:
     if last_price is None or last_price < PRECO_MIN_USD:
         return False
 
-    # 1) Earnings
-    if EXCLUIR_EARNINGS and should_exclude_by_earnings(ticker, EARNINGS_LOOKAHEAD_DIAS):
-        return False
-
-    # 2) Histórico
+    # 1) Histórico
     df_d = ticker.history(period="600d", interval="1d",  auto_adjust=True)
     df_w = ticker.history(period="7y",   interval="1wk", auto_adjust=True)
 
@@ -163,11 +147,16 @@ def check_symbol(sym: str) -> bool:
     if not (cond_d and cond_w):
         return False
 
-    # Padrão das últimas 4 barras FECHADAS (exclui candle atual)
-    if len(df_d) < 5:
+    # --- Padrão das últimas 4 barras FECHADAS no D1 ---
+    #
+    # O radar roda às 18:30 BRT (21:30 UTC), APÓS o fechamento do mercado (16:00 ET / 21:00 UTC).
+    # Portanto a última barra do histórico (iloc[-1]) JÁ está fechada e deve ser incluída.
+    # Pegamos as 4 últimas barras do histórico diário diretamente.
+    #
+    if len(df_d) < 4:
         return False
 
-    ultimas_4 = df_d.iloc[-5:-1]  # 4 barras fechadas mais recentes
+    ultimas_4 = df_d.iloc[-4:]  # as 4 barras mais recentes, todas fechadas
 
     # 1) Verificar direção de cada barra (bear/bull)
     for i, (_, row) in enumerate(ultimas_4.iterrows()):
@@ -177,7 +166,7 @@ def check_symbol(sym: str) -> bool:
             return False
 
     # 2) Verificar fechamentos crescentes (cada close > close da barra anterior)
-    closes = ultimas_4["Close"].values  # [bar1, bar2, bar3, bar4]
+    closes = ultimas_4["Close"].values
     for i in range(1, len(closes)):
         if closes[i] <= closes[i - 1]:
             return False
@@ -210,7 +199,6 @@ def main():
         f"Preço≥${PRECO_MIN_USD:g} | "
         f"EMA21 + EMA120 + SMA200 (D1 e W1) | "
         f"Padrão: 🔴🟢🟢🟢 + closes crescentes"
-        + (f" | Sem earnings ≤{EARNINGS_LOOKAHEAD_DIAS}d" if EXCLUIR_EARNINGS else "")
     )
 
     titulo = (
