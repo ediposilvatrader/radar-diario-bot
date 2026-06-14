@@ -18,6 +18,10 @@ SMA_LONG  = 200
 
 PRECO_MIN_USD = 50.0
 
+# Modo debug: imprime diagnóstico detalhado de cada ticker no log do GitHub Actions
+# (NÃO afeta a mensagem do Telegram, só aparece nos logs da execução)
+DEBUG = True
+
 # Padrão das últimas 4 barras FECHADAS no D1
 # False = bear (close < open) | True = bull (close > open)
 PADRAO_BARRAS = [False, True, True, True]  # bear, bull, bull, bull
@@ -104,9 +108,14 @@ def get_last_price_usd(ticker: yf.Ticker):
 def check_symbol(sym: str) -> bool:
     ticker = yf.Ticker(sym)
 
+    def dbg(msg):
+        if DEBUG:
+            print(f"    [{sym}] {msg}")
+
     # 0) Preço mínimo
     last_price = get_last_price_usd(ticker)
     if last_price is None or last_price < PRECO_MIN_USD:
+        dbg(f"REPROVADO — preço ({last_price}) abaixo de {PRECO_MIN_USD}")
         return False
 
     # 1) Histórico
@@ -114,8 +123,10 @@ def check_symbol(sym: str) -> bool:
     df_w = ticker.history(period="7y",   interval="1wk", auto_adjust=True)
 
     if df_d is None or df_w is None or df_d.empty or df_w.empty:
+        dbg("REPROVADO — histórico vazio")
         return False
     if len(df_d) < 205 or len(df_w) < 205:
+        dbg(f"REPROVADO — histórico insuficiente (D1={len(df_d)}, W1={len(df_w)})")
         return False
 
     # Médias D1
@@ -131,46 +142,81 @@ def check_symbol(sym: str) -> bool:
     ld = df_d.iloc[-1]
     lw = df_w.iloc[-1]
 
+    if DEBUG:
+        dbg(f"última barra D1: {df_d.index[-1].date()}  Close={ld['Close']:.2f}")
+        dbg(f"última barra W1: {df_w.index[-1].date()}  Close={lw['Close']:.2f}")
+
     # Preço acima das 3 médias no D1
-    cond_d = (
-        ld["Close"] > ld["ema21"] and
-        ld["Close"] > ld["ema120"] and
-        ld["Close"] > ld["sma200"]
-    )
+    cond_d_21  = ld["Close"] > ld["ema21"]
+    cond_d_120 = ld["Close"] > ld["ema120"]
+    cond_d_200 = ld["Close"] > ld["sma200"]
+    cond_d = cond_d_21 and cond_d_120 and cond_d_200
+
     # Preço acima das 3 médias no W1
-    cond_w = (
-        lw["Close"] > lw["ema21"] and
-        lw["Close"] > lw["ema120"] and
-        lw["Close"] > lw["sma200"]
-    )
+    cond_w_21  = lw["Close"] > lw["ema21"]
+    cond_w_120 = lw["Close"] > lw["ema120"]
+    cond_w_200 = lw["Close"] > lw["sma200"]
+    cond_w = cond_w_21 and cond_w_120 and cond_w_200
+
+    if DEBUG:
+        dbg(
+            f"D1 médias -> ema21:{'OK' if cond_d_21 else 'FALHA'} "
+            f"ema120:{'OK' if cond_d_120 else 'FALHA'} "
+            f"sma200:{'OK' if cond_d_200 else 'FALHA'} "
+            f"(close={ld['Close']:.2f} ema21={ld['ema21']:.2f} "
+            f"ema120={ld['ema120']:.2f} sma200={ld['sma200']:.2f})"
+        )
+        dbg(
+            f"W1 médias -> ema21:{'OK' if cond_w_21 else 'FALHA'} "
+            f"ema120:{'OK' if cond_w_120 else 'FALHA'} "
+            f"sma200:{'OK' if cond_w_200 else 'FALHA'} "
+            f"(close={lw['Close']:.2f} ema21={lw['ema21']:.2f} "
+            f"ema120={lw['ema120']:.2f} sma200={lw['sma200']:.2f})"
+        )
 
     if not (cond_d and cond_w):
+        dbg("REPROVADO — não está acima das 3 médias em D1 e/ou W1")
         return False
 
     # --- Padrão das últimas 4 barras FECHADAS no D1 ---
-    #
-    # O radar roda às 18:30 BRT (21:30 UTC), APÓS o fechamento do mercado (16:00 ET / 21:00 UTC).
-    # Portanto a última barra do histórico (iloc[-1]) JÁ está fechada e deve ser incluída.
-    # Pegamos as 4 últimas barras do histórico diário diretamente.
-    #
     if len(df_d) < 4:
+        dbg("REPROVADO — menos de 4 barras D1 disponíveis")
         return False
 
     ultimas_4 = df_d.iloc[-4:]  # as 4 barras mais recentes, todas fechadas
+
+    if DEBUG:
+        for i, (idx, row) in enumerate(ultimas_4.iterrows()):
+            real_bull = row["Close"] > row["Open"]
+            esperado  = "bull" if PADRAO_BARRAS[i] else "bear"
+            real      = "bull" if real_bull else "bear"
+            ok_dir    = "OK" if real_bull == PADRAO_BARRAS[i] else "FALHA"
+            dbg(
+                f"barra[{i}] {idx.date()} O={row['Open']:.2f} C={row['Close']:.2f} "
+                f"-> {real} (esperado {esperado}) [{ok_dir}]"
+            )
 
     # 1) Verificar direção de cada barra (bear/bull)
     for i, (_, row) in enumerate(ultimas_4.iterrows()):
         esperado_bull = PADRAO_BARRAS[i]
         real_bull     = row["Close"] > row["Open"]
         if real_bull != esperado_bull:
+            dbg("REPROVADO — padrão de direção das barras não corresponde")
             return False
 
     # 2) Verificar fechamentos crescentes (cada close > close da barra anterior)
     closes = ultimas_4["Close"].values
+    if DEBUG:
+        seq = " -> ".join(f"{c:.2f}" for c in closes)
+        crescente = all(closes[i] > closes[i-1] for i in range(1, len(closes)))
+        dbg(f"closes: {seq}  (crescente: {'OK' if crescente else 'FALHA'})")
+
     for i in range(1, len(closes)):
         if closes[i] <= closes[i - 1]:
+            dbg("REPROVADO — closes não são estritamente crescentes")
             return False
 
+    dbg("APROVADO — todas as condições atendidas")
     return True
 
 # =======================
