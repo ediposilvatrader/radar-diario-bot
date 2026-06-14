@@ -34,27 +34,30 @@ MERCADO_FECHA_UTC = datetime.time(21, 0)
 
 TICKERS = [
     "AA","AAPL","ABBV","ABNB","ACN","ADBE","ADI","ADP","AEP","AIG","AKAM","AMAT","AMD",
-    "AMGN","AMT","AMZN","ANET","ANSS","APPN","APPS","ATR","AVGO","AVY","AWK","AXON",
+    "AMGN","AMT","AMZN","ANET","APPN","APPS","ATR","AVGO","AVY","AWK","AXON",
     "AXP","AZO","BA","BAC","BALL","BAX","BB","BBY","BDX","BEN","BF-B","BIDU","BIIB","BILI",
     "BK","BKNG","BLK","BMY","BNS","BRK-B","BSX","BURL","BX","BYD","BYND","BZUN","C","CAT",
-    "CB","CBOE","CCI","CHD","CHGG","CHWY","CLX","CM","CMA","CMCSA","CME","CMG","CNC","COP",
+    "CB","CBOE","CCI","CHD","CHGG","CHWY","CLX","CM","CMCSA","CME","CMG","CNC","COP",
     "COST","CP","CPB","CPRI","CPRT","CRM","CRWD","CSCO","CSX","CTRA","CVNA","CVS","CVX",
-    "CYBR","D","DAL","DAN","DBX","DD","DE","DELL","DG","DHR","DIS","DK","DKNG","DLR","DLTR",
+    "D","DAL","DAN","DBX","DD","DE","DELL","DG","DHR","DIS","DK","DKNG","DLR","DLTR",
     "DOCU","DT","DUK","DXC","DXCM","EA","EBAY","ECL","ED","EEFT","EIX","EL","ENB","ENPH","EPR",
-    "ETR","ETSY","EXAS","EXPE","F","FANG","FCX","FDX","FHN","FITB","FIVE","FL","FLR",
+    "ETR","ETSY","EXPE","F","FANG","FCX","FDX","FHN","FITB","FIVE","FLR",
     "FOX","FSLY","FTI","FTNT","GDS","GE","GILD","GM","GOOG","GPN","GRMN","GS","GT",
-    "HBAN","HD","HLT","HOG","HOLX","HON","HP","HPQ","HRL","HUYA","IAC","IBKR","IBM","IDXX","ILMN",
-    "INCY","INO","INTC","INTU","IRBT","ISRG","J","JNJ","JPM","KEY","KLAC","KMB","KMX","KO",
+    "HBAN","HD","HLT","HOG","HON","HP","HPQ","HRL","HUYA","IAC","IBKR","IBM","IDXX","ILMN",
+    "INCY","INO","INTC","INTU","ISRG","J","JNJ","JPM","KEY","KLAC","KMB","KMX","KO",
     "LHX","LIN","LLY","LMT","LOW","LRCX","LULU","LUMN","LUV","LYFT","MA","MAA","MAC","MAR",
     "MASI","MAT","MCD","MDB","MDLZ","MDT","MDXG","MELI","META","MGM","MKC","MKTX","MLM","MMM",
     "MNST","MO","MPC","MRK","MRVL","MS","MSCI","MSFT","MTCH","MTZ","MU","NEE","NEM","NET",
     "NFLX","NICE","NKE","NOW","NTAP","NTRS","NVDA","NVO","NVR","NXPI","NXST","OC","OKE","OKTA",
     "OMC","ORCL","PAAS","PANW","PDD","PEP","PFE","PG","PGR","PH","PINS","PLD","PLNT","PLTR","PM",
-    "PNC","PNR","PODD","POOL","PSO","PYPL","QCOM","RAD","RBLX","RDFN","RH","RNG","ROKU","RTX",
-    "SBAC","SBUX","SE","SEDG","SFIX","SHAK","SHOP","SIRI","SKX","SNAP","SNOW","SPLK","SQ","STT","SWK","SYK",
+    "PNC","PNR","PODD","POOL","PSO","PYPL","QCOM","RBLX","RH","RNG","ROKU","RTX",
+    "SBAC","SBUX","SE","SEDG","SFIX","SHAK","SHOP","SIRI","SNAP","SNOW","XYZ","STT","SWK","SYK",
     "T","TAP","TDG","TDOC","TEAM","TFC","THO","TJX","TMO","TMUS","TRV","TSLA","TSN","TTD","TWLO","TXN",
-    "UAL","UBER","UI","UNH","UNP","UPS","URBN","USB","V","VMW","VZ","W","WBA","WDAY","WDC","WEN","WFC","WHR","WM","WTW","WYNN",
-    "X","XEL","XOM","YELP","ZG","ZTS"
+    "UAL","UBER","UI","UNH","UNP","UPS","URBN","USB","V","VZ","W","WDAY","WDC","WEN","WFC","WHR","WM","WTW","WYNN",
+    "XEL","XOM","YELP","ZG","ZTS",
+
+    # ETFs setoriais SPDR — cobrem os 11 setores GICS do mercado americano
+    "XLC","XLY","XLP","XLE","XLF","XLV","XLI","XLB","XLRE","XLK","XLU"
 ]
 
 # =======================
@@ -204,16 +207,23 @@ def check_symbol(sym: str) -> bool:
             dbg("REPROVADO — padrão de direção das barras não corresponde")
             return False
 
-    # 2) Verificar fechamentos crescentes (cada close > close da barra anterior)
+    # 2) Verificar fechamentos crescentes APENAS entre as 3 barras bull
+    #    (close[1] < close[2] < close[3]) — ignora o close da barra bear (índice 0),
+    #    pois é comum a 1ª barra bull fechar abaixo do close da barra bear anterior
+    #    (gap down + recuperação parcial) e ainda assim configurar o padrão.
     closes = ultimas_4["Close"].values
+    closes_bull = closes[1:]  # close[1], close[2], close[3]
+
     if DEBUG:
         seq = " -> ".join(f"{c:.2f}" for c in closes)
-        crescente = all(closes[i] > closes[i-1] for i in range(1, len(closes)))
-        dbg(f"closes: {seq}  (crescente: {'OK' if crescente else 'FALHA'})")
+        seq_bull = " -> ".join(f"{c:.2f}" for c in closes_bull)
+        crescente = all(closes_bull[i] > closes_bull[i-1] for i in range(1, len(closes_bull)))
+        dbg(f"closes (4 barras): {seq}")
+        dbg(f"closes bull (1-3): {seq_bull}  (crescente: {'OK' if crescente else 'FALHA'})")
 
-    for i in range(1, len(closes)):
-        if closes[i] <= closes[i - 1]:
-            dbg("REPROVADO — closes não são estritamente crescentes")
+    for i in range(1, len(closes_bull)):
+        if closes_bull[i] <= closes_bull[i - 1]:
+            dbg("REPROVADO — closes das barras bull não são estritamente crescentes")
             return False
 
     dbg("APROVADO — todas as condições atendidas")
