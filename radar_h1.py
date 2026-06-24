@@ -6,8 +6,9 @@ import requests
 import pandas as pd
 
 # — Secrets do GitHub Actions
-TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+TELEGRAM_TOKEN         = os.environ["TELEGRAM_TOKEN"]
+TELEGRAM_CHAT_ID_H1    = os.environ["TELEGRAM_CHAT_ID_H1"]
+TELEGRAM_THREAD_ID_H1  = os.environ.get("TELEGRAM_THREAD_ID_H1")  # opcional — tópico do grupo
 
 # =========================
 # CONFIGURAÇÕES
@@ -66,7 +67,9 @@ TICKERS = [
 
 def send_telegram(msg: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
+    payload = {"chat_id": TELEGRAM_CHAT_ID_H1, "text": msg, "parse_mode": "Markdown"}
+    if TELEGRAM_THREAD_ID_H1:
+        payload["message_thread_id"] = TELEGRAM_THREAD_ID_H1
     try:
         requests.post(url, json=payload, timeout=20)
     except Exception as e:
