@@ -1,141 +1,302 @@
 import os
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import pandas as pd
+import datetime
+import zoneinfo
 import yfinance as yf
 import requests
+import pandas as pd
 
-# ===== SECRETS =====
-TELEGRAM_TOKEN        = os.environ["TELEGRAM_TOKEN"]
-TELEGRAM_CHAT_ID_H1   = int(os.environ["TELEGRAM_CHAT_ID_H1"])
-TELEGRAM_THREAD_ID_H1 = os.environ.get("TELEGRAM_THREAD_ID_H1")
+# — Secrets do GitHub Actions
+TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]
+TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-# ===== PARÂMETROS =====
-EMA_FAST = 21
-EMA_MID  = 120
-SMA_LONG = 200
-# tolerância p/ “encostou na média”
-EPS_ABS = 0.02   # US$ 0,02
-EPS_REL = 0.001  # 0,10%
+# =========================
+# CONFIGURAÇÕES
+# =========================
+EMA_FAST  = 21
+EMA_MID   = 120
+SMA_LONG  = 200
+
+PRECO_MIN_USD = 50.0
+
+# Modo debug: imprime diagnóstico detalhado de cada ticker no log do GitHub Actions
+# (NÃO afeta a mensagem do Telegram, só aparece nos logs da execução)
+DEBUG = True
+
+# Padrão das últimas 4 barras FECHADAS no H1
+# False = bear (close < open) | True = bull (close > open)
+PADRAO_BARRAS = [False, True, True, True]  # bear, bull, bull, bull
+
+# Horário de fechamento do mercado americano em UTC
+# NYSE/NASDAQ fecha às 21:00 UTC (16:00 ET / 20:00 UTC com horário de verão EUA)
+# Usamos 21:00 UTC como referência segura — o radar roda às 21:30 UTC (18:30 BRT)
+# então o mercado JÁ está fechado e a última barra H1 está 100% fechada
+MERCADO_FECHA_UTC = datetime.time(21, 0)
 
 TICKERS = [
-    "AIG","AMZN","AAPL","AXP","BA","BAC","BKNG","BLK","C","CAT","COST","CSCO","CVX","DAL",
-    "DD","EXPE","F","GE","GM","GOOG","GS","HLT","HPQ","IBM","INTC","JNJ","JPM","KO","MA",
-    "MCD","META","MNST","MS","MSFT","NFLX","NVDA","ORCL","PEP","PG","PLTR","PM","RCL","SBUX",
-    "SPOT","T","TSLA","UBER","V","WFC","WMT","XOM"
+    "AA","AAPL","ABBV","ABNB","ACN","ADBE","ADI","ADP","AEP","AIG","AKAM","AMAT","AMD",
+    "AMGN","AMT","AMZN","ANET","APPN","APPS","ATR","AVGO","AVY","AWK","AXON",
+    "AXP","AZO","BA","BAC","BALL","BAX","BB","BBY","BDX","BEN","BF-B","BIDU","BIIB","BILI",
+    "BK","BKNG","BLK","BMY","BNS","BRK-B","BSX","BURL","BX","BYD","BYND","BZUN","C","CAT",
+    "CB","CBOE","CCI","CHD","CHGG","CHWY","CLX","CM","CMCSA","CME","CMG","CNC","COP",
+    "COST","CP","CPB","CPRI","CPRT","CRM","CRWD","CSCO","CSX","CTRA","CVNA","CVS","CVX",
+    "D","DAL","DAN","DBX","DD","DE","DELL","DG","DHR","DIS","DK","DKNG","DLR","DLTR",
+    "DOCU","DT","DUK","DXC","DXCM","EA","EBAY","ECL","ED","EEFT","EIX","EL","ENB","ENPH","EPR",
+    "ETR","ETSY","EXPE","F","FANG","FCX","FDX","FHN","FITB","FIVE","FLR",
+    "FOX","FSLY","FTI","FTNT","GDS","GE","GILD","GM","GOOG","GPN","GRMN","GS","GT",
+    "HBAN","HD","HLT","HOG","HON","HP","HPQ","HRL","HUYA","IAC","IBKR","IBM","IDXX","ILMN",
+    "INCY","INO","INTC","INTU","ISRG","J","JNJ","JPM","KEY","KLAC","KMB","KMX","KO",
+    "LHX","LIN","LLY","LMT","LOW","LRCX","LULU","LUMN","LUV","LYFT","MA","MAA","MAC","MAR",
+    "MASI","MAT","MCD","MDB","MDLZ","MDT","MDXG","MELI","META","MGM","MKC","MKTX","MLM","MMM",
+    "MNST","MO","MPC","MRK","MRVL","MS","MSCI","MSFT","MTCH","MTZ","MU","NEE","NEM","NET",
+    "NFLX","NICE","NKE","NOW","NTAP","NTRS","NVDA","NVO","NVR","NXPI","NXST","OC","OKE","OKTA",
+    "OMC","ORCL","PAAS","PANW","PDD","PEP","PFE","PG","PGR","PH","PINS","PLD","PLNT","PLTR","PM",
+    "PNC","PNR","PODD","POOL","PSO","PYPL","QCOM","RBLX","RH","RNG","ROKU","RTX",
+    "SBAC","SBUX","SE","SEDG","SFIX","SHAK","SHOP","SIRI","SNAP","SNOW","XYZ","STT","SWK","SYK",
+    "T","TAP","TDG","TDOC","TEAM","TFC","THO","TJX","TMO","TMUS","TRV","TSLA","TSN","TTD","TWLO","TXN",
+    "UAL","UBER","UI","UNH","UNP","UPS","URBN","USB","V","VZ","W","WDAY","WDC","WEN","WFC","WHR","WM","WTW","WYNN",
+    "XEL","XOM","YELP","ZG","ZTS",
+
+    # ETFs setoriais SPDR — cobrem os 11 setores GICS do mercado americano
+    "XLC","XLY","XLP","XLE","XLF","XLV","XLI","XLB","XLRE","XLK","XLU"
 ]
 
-# ===== FUNÇÕES =====
-def ema(s: pd.Series, n: int) -> pd.Series:
-    return s.ewm(span=n, adjust=False, min_periods=n).mean()
+# =======================
+# HELPERS
+# =======================
 
-def sma(s: pd.Series, n: int) -> pd.Series:
-    return s.rolling(window=n, min_periods=n).mean()
+def send_telegram(msg: str):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
+    try:
+        requests.post(url, json=payload, timeout=20)
+    except Exception as e:
+        print(f"Erro Telegram: {e}")
 
-def fetch_last(sym: str, interval: str, period: str) -> pd.Series | None:
-    df = yf.Ticker(sym).history(
-        period=period, interval=interval,
-        auto_adjust=False, prepost=False, actions=False
-    )
-    if df.empty or "Close" not in df.columns:
+def safe_float(x):
+    try:
+        return float(x)
+    except Exception:
         return None
-    close = pd.to_numeric(df["Close"], errors="coerce")
-    out = pd.DataFrame({
-        "Close":    close,
-        "ema_fast": ema(close, EMA_FAST),
-        "ema_mid":  ema(close, EMA_MID),
-        "sma_long": sma(close, SMA_LONG),
-    }).dropna()
-    return None if out.empty else out.iloc[-1]
 
-def tol_ge(a: float, b: float) -> bool:
-    t = max(EPS_ABS, abs(b) * EPS_REL)
-    return a + t >= b
-
-def close_above_all(row: pd.Series) -> bool:
-    c    = float(row.at["Close"])
-    e21  = float(row.at["ema_fast"])
-    e120 = float(row.at["ema_mid"])
-    s200 = float(row.at["sma_long"])
-    return tol_ge(c, e21) and tol_ge(c, e120) and tol_ge(c, s200)
-
-def last_n_positive_h1(sym: str, n: int = 3) -> bool:
+def mercado_fechado() -> bool:
     """
-    Verifica se as N últimas velas fechadas do H1 são positivas (Close > Open).
+    Retorna True se o mercado americano já fechou hoje (após 21:00 UTC).
+    Mantido aqui para diagnóstico/uso manual — a checagem real de barra
+    fechada é feita por descartar_barra_aberta(), pois agora o radar roda
+    de hora em hora durante o pregão.
     """
-    df = yf.Ticker(sym).history(
-        period="10d", interval="60m",
-        auto_adjust=False, prepost=False, actions=False
-    )
-    if df.empty or "Open" not in df.columns or "Close" not in df.columns:
+    agora_utc = datetime.datetime.now(datetime.timezone.utc).time()
+    return agora_utc >= MERCADO_FECHA_UTC
+
+def descartar_barra_aberta(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove a última barra do DataFrame se ela ainda não tiver fechado.
+    Uma barra H1 com horário de início `t` só fecha em `t + 1h`.
+    Compara isso com o horário atual em UTC; se a barra ainda não fechou,
+    ela é descartada para não contaminar médias/padrão com dado parcial.
+    """
+    if df is None or df.empty:
+        return df
+
+    agora_utc = pd.Timestamp.now(tz="UTC")
+    ultimo_idx = df.index[-1]
+
+    # Garante que o timestamp do índice tenha timezone para comparar com agora_utc
+    if ultimo_idx.tzinfo is None:
+        ultimo_idx = ultimo_idx.tz_localize("UTC")
+
+    fechamento_barra = ultimo_idx + pd.Timedelta(hours=1)
+
+    if fechamento_barra > agora_utc:
+        df = df.iloc[:-1]
+
+    return df
+
+def get_last_price_usd(ticker: yf.Ticker):
+    try:
+        info = ticker.fast_info
+        if hasattr(info, "last_price") and info.last_price is not None:
+            return safe_float(info.last_price)
+    except Exception:
+        pass
+    try:
+        p = ticker.info.get("regularMarketPrice")
+        if p is not None:
+            return safe_float(p)
+    except Exception:
+        pass
+    try:
+        df = ticker.history(period="10d", interval="1d", auto_adjust=True)
+        if df is not None and not df.empty:
+            return safe_float(df["Close"].iloc[-1])
+    except Exception:
+        pass
+    return None
+
+def check_symbol(sym: str) -> bool:
+    ticker = yf.Ticker(sym)
+
+    def dbg(msg):
+        if DEBUG:
+            print(f"    [{sym}] {msg}")
+
+    # 0) Preço mínimo
+    last_price = get_last_price_usd(ticker)
+    if last_price is None or last_price < PRECO_MIN_USD:
+        dbg(f"REPROVADO — preço ({last_price}) abaixo de {PRECO_MIN_USD}")
         return False
 
-    o = pd.to_numeric(df["Open"], errors="coerce")
-    c = pd.to_numeric(df["Close"], errors="coerce")
+    # 1) Histórico
+    # H1 (sinal) — Yahoo limita dados intraday de 1h a ~730 dias
+    df_h = ticker.history(period="730d", interval="1h", auto_adjust=True)
+    # D1 (viés)
+    df_d = ticker.history(period="600d", interval="1d", auto_adjust=True)
 
-    sub = pd.DataFrame({"Open": o, "Close": c}).dropna()
-    if len(sub) < n:
+    if df_h is None or df_d is None or df_h.empty or df_d.empty:
+        dbg("REPROVADO — histórico vazio")
         return False
 
-    last = sub.iloc[-n:]
-    return bool((last["Close"] > last["Open"]).all())
-
-def passes(sym: str) -> bool:
-    # Filtro das médias no H1
-    h1 = fetch_last(sym, "60m", "180d")
-    if h1 is None or not close_above_all(h1):
+    # Descarta a barra H1 em formação (ainda não fechada) — essencial agora
+    # que o radar roda de hora em hora, inclusive durante o pregão
+    antes = len(df_h)
+    df_h = descartar_barra_aberta(df_h)
+    if DEBUG and len(df_h) < antes:
+        dbg(f"barra H1 aberta descartada (última barra fechada: {df_h.index[-1]})")
+    if len(df_h) < 205 or len(df_d) < 205:
+        dbg(f"REPROVADO — histórico insuficiente (H1={len(df_h)}, D1={len(df_d)})")
         return False
 
-    # Filtro das médias no diário
-    d1 = fetch_last(sym, "1d", "400d")
-    if d1 is None or not close_above_all(d1):
+    # Médias H1
+    df_h["ema21"]  = df_h["Close"].ewm(span=EMA_FAST, adjust=False).mean()
+    df_h["ema120"] = df_h["Close"].ewm(span=EMA_MID,  adjust=False).mean()
+    df_h["sma200"] = df_h["Close"].rolling(window=SMA_LONG).mean()
+
+    # Médias D1
+    df_d["ema21"]  = df_d["Close"].ewm(span=EMA_FAST, adjust=False).mean()
+    df_d["ema120"] = df_d["Close"].ewm(span=EMA_MID,  adjust=False).mean()
+    df_d["sma200"] = df_d["Close"].rolling(window=SMA_LONG).mean()
+
+    lh = df_h.iloc[-1]
+    ld = df_d.iloc[-1]
+
+    if DEBUG:
+        dbg(f"última barra H1: {df_h.index[-1]}  Close={lh['Close']:.2f}")
+        dbg(f"última barra D1: {df_d.index[-1].date()}  Close={ld['Close']:.2f}")
+
+    # Preço acima das 3 médias no H1
+    cond_h_21  = lh["Close"] > lh["ema21"]
+    cond_h_120 = lh["Close"] > lh["ema120"]
+    cond_h_200 = lh["Close"] > lh["sma200"]
+    cond_h = cond_h_21 and cond_h_120 and cond_h_200
+
+    # Preço acima das 3 médias no D1
+    cond_d_21  = ld["Close"] > ld["ema21"]
+    cond_d_120 = ld["Close"] > ld["ema120"]
+    cond_d_200 = ld["Close"] > ld["sma200"]
+    cond_d = cond_d_21 and cond_d_120 and cond_d_200
+
+    if DEBUG:
+        dbg(
+            f"H1 médias -> ema21:{'OK' if cond_h_21 else 'FALHA'} "
+            f"ema120:{'OK' if cond_h_120 else 'FALHA'} "
+            f"sma200:{'OK' if cond_h_200 else 'FALHA'} "
+            f"(close={lh['Close']:.2f} ema21={lh['ema21']:.2f} "
+            f"ema120={lh['ema120']:.2f} sma200={lh['sma200']:.2f})"
+        )
+        dbg(
+            f"D1 médias -> ema21:{'OK' if cond_d_21 else 'FALHA'} "
+            f"ema120:{'OK' if cond_d_120 else 'FALHA'} "
+            f"sma200:{'OK' if cond_d_200 else 'FALHA'} "
+            f"(close={ld['Close']:.2f} ema21={ld['ema21']:.2f} "
+            f"ema120={ld['ema120']:.2f} sma200={ld['sma200']:.2f})"
+        )
+
+    if not (cond_h and cond_d):
+        dbg("REPROVADO — não está acima das 3 médias em H1 e/ou D1")
         return False
 
-    # ===== NOVO FILTRO: 3 últimas velas fechadas do H1 positivas =====
-    if not last_n_positive_h1(sym, 3):
+    # --- Padrão das últimas 4 barras FECHADAS no H1 ---
+    if len(df_h) < 4:
+        dbg("REPROVADO — menos de 4 barras H1 disponíveis")
         return False
 
+    ultimas_4 = df_h.iloc[-4:]  # as 4 barras mais recentes, todas fechadas
+
+    if DEBUG:
+        for i, (idx, row) in enumerate(ultimas_4.iterrows()):
+            real_bull = row["Close"] > row["Open"]
+            esperado  = "bull" if PADRAO_BARRAS[i] else "bear"
+            real      = "bull" if real_bull else "bear"
+            ok_dir    = "OK" if real_bull == PADRAO_BARRAS[i] else "FALHA"
+            dbg(
+                f"barra[{i}] {idx} O={row['Open']:.2f} C={row['Close']:.2f} "
+                f"-> {real} (esperado {esperado}) [{ok_dir}]"
+            )
+
+    # 1) Verificar direção de cada barra (bear/bull)
+    for i, (_, row) in enumerate(ultimas_4.iterrows()):
+        esperado_bull = PADRAO_BARRAS[i]
+        real_bull     = row["Close"] > row["Open"]
+        if real_bull != esperado_bull:
+            dbg("REPROVADO — padrão de direção das barras não corresponde")
+            return False
+
+    # 2) Verificar fechamentos crescentes APENAS entre as 3 barras bull
+    #    (close[1] < close[2] < close[3]) — ignora o close da barra bear (índice 0),
+    #    pois é comum a 1ª barra bull fechar abaixo do close da barra bear anterior
+    #    (gap down + recuperação parcial) e ainda assim configurar o padrão.
+    closes = ultimas_4["Close"].values
+    closes_bull = closes[1:]  # close[1], close[2], close[3]
+
+    if DEBUG:
+        seq = " -> ".join(f"{c:.2f}" for c in closes)
+        seq_bull = " -> ".join(f"{c:.2f}" for c in closes_bull)
+        crescente = all(closes_bull[i] > closes_bull[i-1] for i in range(1, len(closes_bull)))
+        dbg(f"closes (4 barras): {seq}")
+        dbg(f"closes bull (1-3): {seq_bull}  (crescente: {'OK' if crescente else 'FALHA'})")
+
+    for i in range(1, len(closes_bull)):
+        if closes_bull[i] <= closes_bull[i - 1]:
+            dbg("REPROVADO — closes das barras bull não são estritamente crescentes")
+            return False
+
+    dbg("APROVADO — todas as condições atendidas")
     return True
 
-def send_telegram(text: str):
-    """Envia mensagem e LOGA status/erros. Tenta 3x com backoff; se falhar, levanta exceção."""
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID_H1, "text": text, "disable_web_page_preview": True}
-    if TELEGRAM_THREAD_ID_H1:
-        payload["message_thread_id"] = int(TELEGRAM_THREAD_ID_H1)
-
-    last_err = None
-    for i in range(3):
-        try:
-            r = requests.post(url, json=payload, timeout=10)
-            ok = False
-            try:
-                ok = (r.status_code == 200) and r.json().get("ok", False)
-            except Exception:
-                pass
-            if ok:
-                print(f"[Telegram] OK (tentativa {i+1})")
-                return
-            print(f"[Telegram] Falha (tentativa {i+1}): {r.status_code} {r.text}")
-            last_err = f"{r.status_code} {r.text}"
-        except Exception as e:
-            print(f"[Telegram] Erro (tentativa {i+1}): {e}")
-            last_err = str(e)
-        time.sleep(2 * (i + 1))
-    raise RuntimeError(f"Falha ao enviar mensagem ao Telegram: {last_err}")
+# =======================
+# EXECUÇÃO DIRETA
+# =======================
 
 def main():
-    hits = []
-    with ThreadPoolExecutor(max_workers=min(12, len(TICKERS))) as ex:
-        futs = {ex.submit(passes, t): t for t in TICKERS}
-        for f in as_completed(futs):
-            if f.result():
-                hits.append(futs[f])
-    hits.sort()
+    tz_brt = zoneinfo.ZoneInfo("America/Sao_Paulo")
+    agora  = datetime.datetime.now(tz_brt)
+    hoje   = agora.strftime("%d/%m/%Y %H:%M")
 
-    msg = "Radar Pressão H1 - Sinais de Compra\n\nAções: " + (", ".join(hits) if hits else "—")
-    print(f"[Radar] {len(hits)} tickers: {', '.join(hits) if hits else '—'}")
+    print(f"[{hoje}] Iniciando radar H1...")
+
+    hits = []
+    for sym in TICKERS:
+        try:
+            if check_symbol(sym):
+                hits.append(sym)
+                print(f"  ✅ {sym}")
+            else:
+                print(f"  — {sym}")
+        except Exception as e:
+            print(f"  ⚠️  {sym}: {e}")
+
+    if hits:
+        msg = (
+            f"*Radar 3WS H1 — {hoje}*\n\n"
+            f"*Sinais:* {', '.join(hits)}"
+        )
+    else:
+        msg = (
+            f"*Radar 3WS H1 — {hoje}*\n\n"
+            f"Nenhum sinal hoje."
+        )
     send_telegram(msg)
+    print(f"\n[{hoje}] Finalizado. {len(hits)} sinal(is) enviado(s).")
 
 if __name__ == "__main__":
     main()
