@@ -22,14 +22,14 @@ PRECO_MIN_USD = 50.0
 # (NÃO afeta a mensagem do Telegram, só aparece nos logs da execução)
 DEBUG = True
 
-# Padrão das últimas 4 barras FECHADAS no H1
+# Padrão das últimas 4 barras FECHADAS no D1
 # False = bear (close < open) | True = bull (close > open)
 PADRAO_BARRAS = [False, True, True, True]  # bear, bull, bull, bull
 
 # Horário de fechamento do mercado americano em UTC
 # NYSE/NASDAQ fecha às 21:00 UTC (16:00 ET / 20:00 UTC com horário de verão EUA)
 # Usamos 21:00 UTC como referência segura — o radar roda às 21:30 UTC (18:30 BRT)
-# então o mercado JÁ está fechado e a última barra H1 está 100% fechada
+# então o mercado JÁ está fechado e a última barra D1 está 100% fechada
 MERCADO_FECHA_UTC = datetime.time(21, 0)
 
 TICKERS = [
@@ -122,40 +122,32 @@ def check_symbol(sym: str) -> bool:
         return False
 
     # 1) Histórico
-    # H1 (sinal) — Yahoo limita dados intraday de 1h a ~730 dias
-    df_h = ticker.history(period="730d", interval="1h", auto_adjust=True)
-    # D1 (viés)
-    df_d = ticker.history(period="600d", interval="1d", auto_adjust=True)
+    df_d = ticker.history(period="600d", interval="1d",  auto_adjust=True)
+    df_w = ticker.history(period="7y",   interval="1wk", auto_adjust=True)
 
-    if df_h is None or df_d is None or df_h.empty or df_d.empty:
+    if df_d is None or df_w is None or df_d.empty or df_w.empty:
         dbg("REPROVADO — histórico vazio")
         return False
-    if len(df_h) < 205 or len(df_d) < 205:
-        dbg(f"REPROVADO — histórico insuficiente (H1={len(df_h)}, D1={len(df_d)})")
+    if len(df_d) < 205 or len(df_w) < 205:
+        dbg(f"REPROVADO — histórico insuficiente (D1={len(df_d)}, W1={len(df_w)})")
         return False
-
-    # Médias H1
-    df_h["ema21"]  = df_h["Close"].ewm(span=EMA_FAST, adjust=False).mean()
-    df_h["ema120"] = df_h["Close"].ewm(span=EMA_MID,  adjust=False).mean()
-    df_h["sma200"] = df_h["Close"].rolling(window=SMA_LONG).mean()
 
     # Médias D1
     df_d["ema21"]  = df_d["Close"].ewm(span=EMA_FAST, adjust=False).mean()
     df_d["ema120"] = df_d["Close"].ewm(span=EMA_MID,  adjust=False).mean()
     df_d["sma200"] = df_d["Close"].rolling(window=SMA_LONG).mean()
 
-    lh = df_h.iloc[-1]
+    # Médias W1
+    df_w["ema21"]  = df_w["Close"].ewm(span=EMA_FAST, adjust=False).mean()
+    df_w["ema120"] = df_w["Close"].ewm(span=EMA_MID,  adjust=False).mean()
+    df_w["sma200"] = df_w["Close"].rolling(window=SMA_LONG).mean()
+
     ld = df_d.iloc[-1]
+    lw = df_w.iloc[-1]
 
     if DEBUG:
-        dbg(f"última barra H1: {df_h.index[-1]}  Close={lh['Close']:.2f}")
         dbg(f"última barra D1: {df_d.index[-1].date()}  Close={ld['Close']:.2f}")
-
-    # Preço acima das 3 médias no H1
-    cond_h_21  = lh["Close"] > lh["ema21"]
-    cond_h_120 = lh["Close"] > lh["ema120"]
-    cond_h_200 = lh["Close"] > lh["sma200"]
-    cond_h = cond_h_21 and cond_h_120 and cond_h_200
+        dbg(f"última barra W1: {df_w.index[-1].date()}  Close={lw['Close']:.2f}")
 
     # Preço acima das 3 médias no D1
     cond_d_21  = ld["Close"] > ld["ema21"]
@@ -163,14 +155,13 @@ def check_symbol(sym: str) -> bool:
     cond_d_200 = ld["Close"] > ld["sma200"]
     cond_d = cond_d_21 and cond_d_120 and cond_d_200
 
+    # Preço acima das 3 médias no W1
+    cond_w_21  = lw["Close"] > lw["ema21"]
+    cond_w_120 = lw["Close"] > lw["ema120"]
+    cond_w_200 = lw["Close"] > lw["sma200"]
+    cond_w = cond_w_21 and cond_w_120 and cond_w_200
+
     if DEBUG:
-        dbg(
-            f"H1 médias -> ema21:{'OK' if cond_h_21 else 'FALHA'} "
-            f"ema120:{'OK' if cond_h_120 else 'FALHA'} "
-            f"sma200:{'OK' if cond_h_200 else 'FALHA'} "
-            f"(close={lh['Close']:.2f} ema21={lh['ema21']:.2f} "
-            f"ema120={lh['ema120']:.2f} sma200={lh['sma200']:.2f})"
-        )
         dbg(
             f"D1 médias -> ema21:{'OK' if cond_d_21 else 'FALHA'} "
             f"ema120:{'OK' if cond_d_120 else 'FALHA'} "
@@ -178,17 +169,24 @@ def check_symbol(sym: str) -> bool:
             f"(close={ld['Close']:.2f} ema21={ld['ema21']:.2f} "
             f"ema120={ld['ema120']:.2f} sma200={ld['sma200']:.2f})"
         )
+        dbg(
+            f"W1 médias -> ema21:{'OK' if cond_w_21 else 'FALHA'} "
+            f"ema120:{'OK' if cond_w_120 else 'FALHA'} "
+            f"sma200:{'OK' if cond_w_200 else 'FALHA'} "
+            f"(close={lw['Close']:.2f} ema21={lw['ema21']:.2f} "
+            f"ema120={lw['ema120']:.2f} sma200={lw['sma200']:.2f})"
+        )
 
-    if not (cond_h and cond_d):
-        dbg("REPROVADO — não está acima das 3 médias em H1 e/ou D1")
+    if not (cond_d and cond_w):
+        dbg("REPROVADO — não está acima das 3 médias em D1 e/ou W1")
         return False
 
-    # --- Padrão das últimas 4 barras FECHADAS no H1 ---
-    if len(df_h) < 4:
-        dbg("REPROVADO — menos de 4 barras H1 disponíveis")
+    # --- Padrão das últimas 4 barras FECHADAS no D1 ---
+    if len(df_d) < 4:
+        dbg("REPROVADO — menos de 4 barras D1 disponíveis")
         return False
 
-    ultimas_4 = df_h.iloc[-4:]  # as 4 barras mais recentes, todas fechadas
+    ultimas_4 = df_d.iloc[-4:]  # as 4 barras mais recentes, todas fechadas
 
     if DEBUG:
         for i, (idx, row) in enumerate(ultimas_4.iterrows()):
@@ -197,7 +195,7 @@ def check_symbol(sym: str) -> bool:
             real      = "bull" if real_bull else "bear"
             ok_dir    = "OK" if real_bull == PADRAO_BARRAS[i] else "FALHA"
             dbg(
-                f"barra[{i}] {idx} O={row['Open']:.2f} C={row['Close']:.2f} "
+                f"barra[{i}] {idx.date()} O={row['Open']:.2f} C={row['Close']:.2f} "
                 f"-> {real} (esperado {esperado}) [{ok_dir}]"
             )
 
@@ -240,7 +238,7 @@ def main():
     agora  = datetime.datetime.now(tz_brt)
     hoje   = agora.strftime("%d/%m/%Y %H:%M")
 
-    print(f"[{hoje}] Iniciando radar H1...")
+    print(f"[{hoje}] Iniciando radar...")
 
     hits = []
     for sym in TICKERS:
@@ -255,12 +253,12 @@ def main():
 
     if hits:
         msg = (
-            f"*Radar 3WS H1 — {hoje}*\n\n"
+            f"*Radar 3WS Diário — {hoje}*\n\n"
             f"*Sinais:* {', '.join(hits)}"
         )
     else:
         msg = (
-            f"*Radar 3WS H1 — {hoje}*\n\n"
+            f"*Radar 3WS Diário — {hoje}*\n\n"
             f"Nenhum sinal hoje."
         )
     send_telegram(msg)
