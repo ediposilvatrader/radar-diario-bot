@@ -1,11 +1,9 @@
 name: 🚀 Executar Radar H1 US PDV
 
 on:
-  schedule:
-    # Mar–Out (EDT = UTC-4) → 10–16 NY = 14–20 UTC, dispara 1x/hora aos :35
-    - cron: "35 14-20 * 3-10 1-5"
-    # Jan–Fev e Nov–Dez (EST = UTC-5) → 10–16 NY = 15–21 UTC, dispara 1x/hora aos :35
-    - cron: "35 15-21 * 1,2,11,12 1-5"
+  # Disparo agendado agora é feito externamente (cron-job.org chamando a API
+  # do GitHub via workflow_dispatch), porque o `schedule:` nativo do GitHub
+  # estava falhando silenciosamente na maioria dos disparos
   workflow_dispatch: {}
 
 jobs:
