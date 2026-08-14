@@ -6,8 +6,9 @@ import requests
 import pandas as pd
 
 # — Secrets do GitHub Actions
-TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+TELEGRAM_TOKEN       = os.environ["TELEGRAM_TOKEN"]
+TELEGRAM_CHAT_ID     = os.environ["TELEGRAM_CHAT_ID"]
+DISCORD_WEBHOOK_URL  = os.environ.get("DISCORD_WEBHOOK_URL")  # opcional — se ausente, só envia Telegram
 
 # =========================
 # CONFIGURAÇÕES
@@ -71,6 +72,16 @@ def send_telegram(msg: str):
         requests.post(url, json=payload, timeout=20)
     except Exception as e:
         print(f"Erro Telegram: {e}")
+
+def send_discord(msg: str):
+    if not DISCORD_WEBHOOK_URL:
+        return
+    # Discord usa Markdown próprio: converte *negrito* (estilo Telegram) para **negrito**
+    payload = {"content": msg.replace("*", "**")}
+    try:
+        requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=20)
+    except Exception as e:
+        print(f"Erro Discord: {e}")
 
 def safe_float(x):
     try:
@@ -262,6 +273,7 @@ def main():
             f"Nenhum sinal hoje."
         )
     send_telegram(msg)
+    send_discord(msg)
     print(f"\n[{hoje}] Finalizado. {len(hits)} sinal(is) enviado(s).")
 
 if __name__ == "__main__":
