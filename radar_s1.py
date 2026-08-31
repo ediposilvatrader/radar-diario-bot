@@ -76,6 +76,32 @@ def safe_float(x):
     except Exception:
         return None
 
+def descartar_semana_aberta(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Remove a última barra do DataFrame semanal se a semana ainda não tiver
+    fechado. Uma barra W1 começa na segunda-feira e só fecha de fato na
+    sexta-feira (mercado fecha às 21:00 UTC, mesma referência conservadora
+    usada em MERCADO_FECHA_UTC no radar.py/radar_h1.py). Evita usar o
+    padrão de velas contra uma semana ainda em formação — mesmo problema
+    que descartar_barra_aberta() resolve pro H1.
+    """
+    if df is None or df.empty:
+        return df
+
+    agora_utc = pd.Timestamp.now(tz="UTC")
+    ultimo_idx = df.index[-1]
+
+    if ultimo_idx.tzinfo is None:
+        ultimo_idx = ultimo_idx.tz_localize("UTC")
+
+    inicio_semana_utc = ultimo_idx.tz_convert("UTC").normalize()
+    fechamento_semana = inicio_semana_utc + pd.Timedelta(days=4, hours=21)
+
+    if fechamento_semana > agora_utc:
+        df = df.iloc[:-1]
+
+    return df
+
 def get_last_price_usd(ticker: yf.Ticker):
     try:
         info = ticker.fast_info
@@ -123,6 +149,15 @@ def check_symbol(sym: str, direcao: str) -> bool:
     if df_w is None or df_m is None or df_w.empty or df_m.empty:
         dbg("REPROVADO — histórico vazio")
         return False
+
+    # Descarta a barra semanal em formação (ainda não fechada) — essencial
+    # já que o radar agora pode rodar manualmente (workflow_dispatch) em
+    # qualquer dia, não só sexta após o fechamento
+    antes = len(df_w)
+    df_w = descartar_semana_aberta(df_w)
+    if DEBUG and len(df_w) < antes:
+        dbg(f"barra W1 aberta descartada (última barra fechada: {df_w.index[-1].date()})")
+
     if len(df_w) < 205 or len(df_m) < 205:
         dbg(f"REPROVADO — histórico insuficiente (W1={len(df_w)}, MN1={len(df_m)})")
         return False
