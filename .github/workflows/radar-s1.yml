@@ -1,14 +1,20 @@
 name: 🚀 Executar Radar S1 US PDV
 
 on:
-  schedule:
-    # Fecha do candle semanal (sexta-feira 16:00 ET) + 30min = 20:30 UTC toda sexta
-    - cron: '30 20 * * 5'
-  workflow_dispatch:
+  # Disparo agendado agora é feito externamente (cron-job.org chamando a API
+  # do GitHub via workflow_dispatch), porque o `schedule:` nativo do GitHub
+  # estava falhando silenciosamente e chegou a desativar este workflow por
+  # inatividade — mesmo motivo que já levou o Radar H1 e o Radar Diário a
+  # trocar para este mesmo padrão.
+  workflow_dispatch: {}
 
 jobs:
   run-radar-s1:
     runs-on: ubuntu-latest
+    timeout-minutes: 8
+    concurrency:
+      group: radar-s1
+      cancel-in-progress: true
     env:
       TELEGRAM_TOKEN:        ${{ secrets.TELEGRAM_TOKEN }}
       TELEGRAM_CHAT_ID_S1:   ${{ secrets.TELEGRAM_CHAT_ID_S1 }}
@@ -26,7 +32,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests pandas yfinance pandas-market-calendars
+          pip install requests pandas yfinance
 
       - name: Run radar S1 script
         run: python radar_s1.py
