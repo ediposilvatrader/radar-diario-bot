@@ -1,4 +1,5 @@
 import os
+import time
 import datetime
 import zoneinfo
 import yfinance as yf
@@ -32,6 +33,15 @@ PADRAO_BARRAS = [False, True, True, True]  # bear, bull, bull, bull
 # Usamos 21:00 UTC como referência segura — o radar roda às 21:30 UTC (18:30 BRT)
 # então o mercado JÁ está fechado e a última barra D1 está 100% fechada
 MERCADO_FECHA_UTC = datetime.time(21, 0)
+
+# Yahoo Finance às vezes demora pra consolidar o candle diário depois do
+# fechamento do mercado — duas execuções minutos apart podem ler closes
+# diferentes pro mesmo dia. Antes de varrer os tickers, checamos duas
+# leituras seguidas de um ticker de referência líquido; só seguimos
+# quando elas baterem (dado "estabilizado").
+TICKER_REFERENCIA_ESTABILIDADE = "AAPL"
+TENTATIVAS_ESTABILIDADE        = 3
+ESPERA_ESTABILIDADE_SEG        = 60
 
 TICKERS = [
     "AA","AAPL","ABBV","ABNB","ACN","ADBE","ADI","ADP","AEP","AIG","AKAM","AMAT","AMD",
@@ -97,6 +107,40 @@ def mercado_fechado() -> bool:
     """
     agora_utc = datetime.datetime.now(datetime.timezone.utc).time()
     return agora_utc >= MERCADO_FECHA_UTC
+
+def get_daily_bar_snapshot(sym: str):
+    """Retorna (data_da_ultima_barra, close_arredondado) pra comparar entre leituras."""
+    try:
+        df = yf.Ticker(sym).history(period="5d", interval="1d", auto_adjust=True)
+        if df is None or df.empty:
+            return None
+        return (df.index[-1].date(), round(float(df["Close"].iloc[-1]), 4))
+    except Exception as e:
+        print(f"    [estabilidade] erro lendo {sym}: {e}")
+        return None
+
+def aguardar_dado_estavel() -> bool:
+    """
+    Compara leituras sucessivas do candle diário de um ticker de referência
+    líquido. Só considera o dado do dia "estabilizado" quando duas leituras
+    seguidas baterem exatamente. Retorna False (sem travar a execução) se
+    não estabilizar dentro das tentativas configuradas — o scan roda mesmo
+    assim, mas a mensagem final avisa que o dado pode não estar 100% final.
+    """
+    anterior = get_daily_bar_snapshot(TICKER_REFERENCIA_ESTABILIDADE)
+    print(f"[estabilidade] leitura inicial ({TICKER_REFERENCIA_ESTABILIDADE}): {anterior}")
+
+    for tentativa in range(1, TENTATIVAS_ESTABILIDADE + 1):
+        time.sleep(ESPERA_ESTABILIDADE_SEG)
+        atual = get_daily_bar_snapshot(TICKER_REFERENCIA_ESTABILIDADE)
+        if anterior is not None and atual == anterior:
+            print(f"[estabilidade] OK após {tentativa} checagem(ns) extra — dado consolidado: {atual}")
+            return True
+        print(f"[estabilidade] tentativa {tentativa}: {anterior} -> {atual} (mudou, aguardando mais)")
+        anterior = atual
+
+    print("[estabilidade] dado NÃO estabilizou dentro do tempo — seguindo mesmo assim, com aviso na mensagem")
+    return False
 
 def get_last_price_usd(ticker: yf.Ticker):
     try:
@@ -251,6 +295,8 @@ def main():
 
     print(f"[{hoje}] Iniciando radar...")
 
+    dado_estavel = aguardar_dado_estavel()
+
     hits = []
     for sym in TICKERS:
         try:
@@ -262,15 +308,21 @@ def main():
         except Exception as e:
             print(f"  ⚠️  {sym}: {e}")
 
+    aviso = (
+        "_(aviso: dado do Yahoo Finance não estabilizou antes do scan — "
+        "resultado pode mudar numa nova execução)_\n\n"
+        if not dado_estavel else ""
+    )
+
     if hits:
         msg = (
             f"*Radar 3WS Diário — {hoje}*\n\n"
-            f"*Sinais:* {', '.join(hits)}"
+            f"{aviso}*Sinais:* {', '.join(hits)}"
         )
     else:
         msg = (
             f"*Radar 3WS Diário — {hoje}*\n\n"
-            f"Nenhum sinal hoje."
+            f"{aviso}Nenhum sinal hoje."
         )
     send_telegram(msg)
     send_discord(msg)
