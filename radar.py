@@ -418,13 +418,18 @@ def main():
     )
 
     if gaps_registrados:
-        detalhes = "; ".join(
-            f"{sym} ({', '.join(d.strftime('%d/%m') for d in dias)})"
-            for sym, dias in gaps_registrados.items()
-        )
+        # Resumido de propósito — em dias de instabilidade ampla do Yahoo
+        # Finance isso pode afetar dezenas/centenas de tickers de uma vez
+        # (visto em 28/08/2026), e listar cada um deixaria a mensagem do
+        # Telegram ilegível. Detalhe por ticker já fica nos logs do
+        # GitHub Actions (dbg() em corrigir_gaps_recentes).
+        todas_as_datas = sorted({d for dias in gaps_registrados.values() for d in dias})
+        datas_str = ", ".join(d.strftime("%d/%m") for d in todas_as_datas)
+        n = len(gaps_registrados)
         aviso += (
             f"_(aviso: buraco no histórico diário do Yahoo Finance reconstruído "
-            f"via intraday em: {detalhes})_\n\n"
+            f"via intraday em {n} ticker(s) — data(s): {datas_str}. "
+            f"Detalhe completo nos logs da execução)_\n\n"
         )
 
     if hits:
