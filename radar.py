@@ -411,38 +411,25 @@ def main():
         except Exception as e:
             print(f"  ⚠️  {sym}: {e}")
 
-    aviso = (
-        "_(aviso: dado do Yahoo Finance não estabilizou antes do scan — "
-        "resultado pode mudar numa nova execução)_\n\n"
-        if not dado_estavel else ""
-    )
+    # Avisos de diagnóstico (instabilidade de dado, buraco reconstruído) NÃO
+    # vão pra nenhuma mensagem — todos os destinos (chat interno, Discord,
+    # grupo de clientes) recebem só o sinal, limpo. O detalhe técnico fica
+    # só aqui no log da execução (GitHub Actions), pra quem for investigar.
+    if not dado_estavel:
+        print("[aviso] dado do Yahoo Finance não estabilizou antes do scan — resultado pode mudar numa nova execução")
 
     if gaps_registrados:
-        # Resumido de propósito — em dias de instabilidade ampla do Yahoo
-        # Finance isso pode afetar dezenas/centenas de tickers de uma vez
-        # (visto em 28/08/2026), e listar cada um deixaria a mensagem do
-        # Telegram ilegível. Detalhe por ticker já fica nos logs do
-        # GitHub Actions (dbg() em corrigir_gaps_recentes).
         todas_as_datas = sorted({d for dias in gaps_registrados.values() for d in dias})
         datas_str = ", ".join(d.strftime("%d/%m") for d in todas_as_datas)
-        n = len(gaps_registrados)
-        aviso += (
-            f"_(aviso: buraco no histórico diário do Yahoo Finance reconstruído "
-            f"via intraday em {n} ticker(s) — data(s): {datas_str}. "
-            f"Detalhe completo nos logs da execução)_\n\n"
-        )
+        print(f"[aviso] buraco no histórico diário do Yahoo Finance reconstruído via intraday em {len(gaps_registrados)} ticker(s) — data(s): {datas_str}")
 
     corpo = f"*Sinais:* {', '.join(hits)}" if hits else "Nenhum sinal hoje."
+    msg = f"*Radar 3WS Diário — {hoje}*\n\n{corpo}"
 
-    # Os avisos (instabilidade de dado, buraco reconstruído) são diagnóstico
-    # interno — não fazem sentido pro assinante pagante, que só quer o sinal.
-    msg_interno   = f"*Radar 3WS Diário — {hoje}*\n\n{aviso}{corpo}"
-    msg_clientes  = f"*Radar 3WS Diário — {hoje}*\n\n{corpo}"
-
-    send_telegram(msg_interno)
-    send_discord(msg_interno)
+    send_telegram(msg)
+    send_discord(msg)
     if TELEGRAM_CHANNEL_ID_CLIENTES:
-        send_telegram(msg_clientes, chat_id=TELEGRAM_CHANNEL_ID_CLIENTES, thread_id=TELEGRAM_THREAD_ID_CLIENTES_D1)
+        send_telegram(msg, chat_id=TELEGRAM_CHANNEL_ID_CLIENTES, thread_id=TELEGRAM_THREAD_ID_CLIENTES_D1)
     print(f"\n[{hoje}] Finalizado. {len(hits)} sinal(is) enviado(s).")
 
 if __name__ == "__main__":
