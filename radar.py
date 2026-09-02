@@ -11,6 +11,12 @@ TELEGRAM_TOKEN       = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID     = os.environ["TELEGRAM_CHAT_ID"]
 DISCORD_WEBHOOK_URL  = os.environ.get("DISCORD_WEBHOOK_URL")  # opcional — se ausente, só envia Telegram
 
+# Grupo dos assinantes pagos (produto Radar 3WS) — grupo com Tópicos (Forum
+# mode) ligado, um tópico por timeframe (D1/H1/S1) + Geral + Suporte. Opcional;
+# se ausente, o radar continua funcionando só com o destino interno de sempre.
+TELEGRAM_CHANNEL_ID_CLIENTES     = os.environ.get("TELEGRAM_CHANNEL_ID_CLIENTES")
+TELEGRAM_THREAD_ID_CLIENTES_D1   = os.environ.get("TELEGRAM_THREAD_ID_CLIENTES_D1")
+
 # =========================
 # CONFIGURAÇÕES
 # =========================
@@ -42,6 +48,16 @@ MERCADO_FECHA_UTC = datetime.time(21, 0)
 TICKER_REFERENCIA_ESTABILIDADE = "AAPL"
 TENTATIVAS_ESTABILIDADE        = 3
 ESPERA_ESTABILIDADE_SEG        = 60
+
+# O Yahoo Finance às vezes devolve o histórico DIÁRIO de um ticker específico
+# com um dia útil inteiro faltando, mesmo esse dia existindo normalmente pra
+# outros tickers e no próprio intraday do ticker afetado (visto em 28/08/2026
+# com DE e XOM: o `.history(interval="1d")` pulava o dia, mas AAPL/SPY tinham
+# e o intraday de 60m de DE/XOM daquele dia existia). Isso desloca a janela
+# das últimas 4 barras do padrão e pode mascarar/inventar sinais. Verificamos
+# só os últimos N dias úteis (custo baixo) contra um calendário de referência
+# e, se achar buraco, reconstruímos a barra faltante via intraday.
+JANELA_VERIFICACAO_GAP_DIAS = 10
 
 TICKERS = [
     "AA","AAPL","ABBV","ABNB","ACN","ADBE","ADI","ADP","AEP","AIG","AKAM","AMAT","AMD",
@@ -75,9 +91,15 @@ TICKERS = [
 # HELPERS
 # =======================
 
-def send_telegram(msg: str):
+def send_telegram(msg: str, chat_id: str = None, thread_id: str = None):
+    """chat_id/thread_id opcionais — por padrão manda pro TELEGRAM_CHAT_ID de
+    sempre (sem tópico); passar chat_id (e opcionalmente thread_id) explícitos
+    permite mandar a mesma mensagem pra outros destinos (ex.: tópico D1 do
+    grupo dos assinantes pagos), sem duplicar a lógica."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
+    payload = {"chat_id": chat_id or TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"}
+    if thread_id:
+        payload["message_thread_id"] = thread_id
     try:
         requests.post(url, json=payload, timeout=20)
     except Exception as e:
@@ -142,6 +164,77 @@ def aguardar_dado_estavel() -> bool:
     print("[estabilidade] dado NÃO estabilizou dentro do tempo — seguindo mesmo assim, com aviso na mensagem")
     return False
 
+def obter_calendario_referencia() -> set:
+    """
+    Dias em que o mercado esteve confirmadamente aberto, segundo o histórico
+    diário do ticker de referência (AAPL — líquido, praticamente nunca tem
+    buraco de dado). Usado pra detectar buracos no histórico de outros
+    tickers, sem confundir buraco de dado com feriado/fim de semana.
+    """
+    try:
+        df = yf.Ticker(TICKER_REFERENCIA_ESTABILIDADE).history(period="1mo", interval="1d", auto_adjust=True)
+        if df is None or df.empty:
+            return set()
+        return set(idx.date() for idx in df.index)
+    except Exception as e:
+        print(f"[gap] erro obtendo calendário de referência: {e}")
+        return set()
+
+def reconstruir_barra_intraday(sym: str, dia: datetime.date):
+    """Reconstrói O/H/L/C/Volume do dia a partir do intraday (60m) do próprio dia."""
+    try:
+        df_intra = yf.Ticker(sym).history(
+            start=dia, end=dia + datetime.timedelta(days=1), interval="60m", auto_adjust=True
+        )
+        if df_intra is None or df_intra.empty:
+            return None
+        return {
+            "Open":  float(df_intra["Open"].iloc[0]),
+            "High":  float(df_intra["High"].max()),
+            "Low":   float(df_intra["Low"].min()),
+            "Close": float(df_intra["Close"].iloc[-1]),
+            "Volume": float(df_intra["Volume"].sum()),
+        }
+    except Exception as e:
+        print(f"    [gap] erro reconstruindo {sym} {dia}: {e}")
+        return None
+
+def corrigir_gaps_recentes(sym: str, df_d: pd.DataFrame, calendario_ref: set, dbg):
+    """
+    Verifica, só na janela recente (JANELA_VERIFICACAO_GAP_DIAS), se algum dia
+    útil do calendário de referência está faltando no histórico diário de
+    `sym`. Se achar, tenta reconstruir a barra via intraday e insere no
+    DataFrame antes do cálculo de médias/padrão. Retorna (df_d, dias_corrigidos).
+    """
+    if not calendario_ref or df_d.empty:
+        return df_d, []
+
+    datas_presentes  = set(idx.date() for idx in df_d.index)
+    ultima_data       = df_d.index[-1].date()
+    limite_inferior   = ultima_data - datetime.timedelta(days=JANELA_VERIFICACAO_GAP_DIAS * 2)
+    dias_esperados    = sorted(d for d in calendario_ref if limite_inferior <= d <= ultima_data)
+    dias_faltando     = [d for d in dias_esperados if d not in datas_presentes]
+
+    if not dias_faltando:
+        return df_d, []
+
+    dias_corrigidos = []
+    for dia in dias_faltando:
+        dbg(f"[gap] dia útil {dia} ausente no histórico diário — tentando reconstruir via intraday")
+        barra = reconstruir_barra_intraday(sym, dia)
+        if barra is None:
+            dbg(f"[gap] não foi possível reconstruir {dia} (sem dado intraday disponível)")
+            continue
+        novo_idx = df_d.index[0].replace(year=dia.year, month=dia.month, day=dia.day)
+        df_d.loc[novo_idx] = barra
+        dias_corrigidos.append(dia)
+        dbg(f"[gap] {dia} reconstruído: O={barra['Open']:.2f} C={barra['Close']:.2f}")
+
+    if dias_corrigidos:
+        df_d = df_d.sort_index()
+
+    return df_d, dias_corrigidos
+
 def get_last_price_usd(ticker: yf.Ticker):
     try:
         info = ticker.fast_info
@@ -163,7 +256,7 @@ def get_last_price_usd(ticker: yf.Ticker):
         pass
     return None
 
-def check_symbol(sym: str) -> bool:
+def check_symbol(sym: str, calendario_ref: set, gaps_registrados: dict) -> bool:
     ticker = yf.Ticker(sym)
 
     def dbg(msg):
@@ -186,6 +279,14 @@ def check_symbol(sym: str) -> bool:
     if len(df_d) < 205 or len(df_w) < 205:
         dbg(f"REPROVADO — histórico insuficiente (D1={len(df_d)}, W1={len(df_w)})")
         return False
+
+    # Corrige buracos de dia útil no histórico diário recente (ver comentário
+    # de JANELA_VERIFICACAO_GAP_DIAS) antes de calcular médias/padrão — senão
+    # a janela das últimas 4 barras fica deslocada e o padrão pode ser
+    # avaliado errado (falso negativo ou falso positivo).
+    df_d, dias_corrigidos = corrigir_gaps_recentes(sym, df_d, calendario_ref, dbg)
+    if dias_corrigidos:
+        gaps_registrados[sym] = dias_corrigidos
 
     # Médias D1
     df_d["ema21"]  = df_d["Close"].ewm(span=EMA_FAST, adjust=False).mean()
@@ -295,12 +396,14 @@ def main():
 
     print(f"[{hoje}] Iniciando radar...")
 
-    dado_estavel = aguardar_dado_estavel()
+    dado_estavel   = aguardar_dado_estavel()
+    calendario_ref = obter_calendario_referencia()
 
     hits = []
+    gaps_registrados = {}
     for sym in TICKERS:
         try:
-            if check_symbol(sym):
+            if check_symbol(sym, calendario_ref, gaps_registrados):
                 hits.append(sym)
                 print(f"  ✅ {sym}")
             else:
@@ -314,6 +417,16 @@ def main():
         if not dado_estavel else ""
     )
 
+    if gaps_registrados:
+        detalhes = "; ".join(
+            f"{sym} ({', '.join(d.strftime('%d/%m') for d in dias)})"
+            for sym, dias in gaps_registrados.items()
+        )
+        aviso += (
+            f"_(aviso: buraco no histórico diário do Yahoo Finance reconstruído "
+            f"via intraday em: {detalhes})_\n\n"
+        )
+
     if hits:
         msg = (
             f"*Radar 3WS Diário — {hoje}*\n\n"
@@ -326,6 +439,8 @@ def main():
         )
     send_telegram(msg)
     send_discord(msg)
+    if TELEGRAM_CHANNEL_ID_CLIENTES:
+        send_telegram(msg, chat_id=TELEGRAM_CHANNEL_ID_CLIENTES, thread_id=TELEGRAM_THREAD_ID_CLIENTES_D1)
     print(f"\n[{hoje}] Finalizado. {len(hits)} sinal(is) enviado(s).")
 
 if __name__ == "__main__":

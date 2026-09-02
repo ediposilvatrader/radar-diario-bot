@@ -19,6 +19,8 @@ jobs:
       TELEGRAM_TOKEN:        ${{ secrets.TELEGRAM_TOKEN }}
       TELEGRAM_CHAT_ID_S1:   ${{ secrets.TELEGRAM_CHAT_ID_S1 }}
       TELEGRAM_THREAD_ID_S1: ${{ secrets.TELEGRAM_THREAD_ID_S1 }}
+      TELEGRAM_CHANNEL_ID_CLIENTES: ${{ secrets.TELEGRAM_CHANNEL_ID_CLIENTES }}
+      TELEGRAM_THREAD_ID_CLIENTES_S1: ${{ secrets.TELEGRAM_THREAD_ID_CLIENTES_S1 }}
 
     steps:
       - name: Check out code

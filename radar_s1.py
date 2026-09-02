@@ -10,6 +10,12 @@ TELEGRAM_TOKEN         = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID_S1    = os.environ["TELEGRAM_CHAT_ID_S1"]
 TELEGRAM_THREAD_ID_S1  = os.environ.get("TELEGRAM_THREAD_ID_S1")  # opcional — tópico do grupo
 
+# Grupo dos assinantes pagos (produto Radar 3WS) — grupo com Tópicos (Forum
+# mode) ligado, um tópico por timeframe (D1/H1/S1) + Geral + Suporte. Opcional;
+# se ausente, o radar continua funcionando só com o destino interno de sempre.
+TELEGRAM_CHANNEL_ID_CLIENTES     = os.environ.get("TELEGRAM_CHANNEL_ID_CLIENTES")
+TELEGRAM_THREAD_ID_CLIENTES_S1   = os.environ.get("TELEGRAM_THREAD_ID_CLIENTES_S1")
+
 # =========================
 # CONFIGURAÇÕES
 # =========================
@@ -60,11 +66,16 @@ TICKERS = [
 # HELPERS
 # =======================
 
-def send_telegram(msg: str):
+def send_telegram(msg: str, chat_id: str = None, thread_id: str = None):
+    """chat_id/thread_id opcionais — por padrão manda pro destino S1 de
+    sempre; passar chat_id explícito (sem thread) permite mandar a mesma
+    mensagem pra outros destinos (ex.: canal dos assinantes pagos)."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID_S1, "text": msg, "parse_mode": "Markdown"}
-    if TELEGRAM_THREAD_ID_S1:
-        payload["message_thread_id"] = TELEGRAM_THREAD_ID_S1
+    destino = chat_id or TELEGRAM_CHAT_ID_S1
+    payload = {"chat_id": destino, "text": msg, "parse_mode": "Markdown"}
+    thread = TELEGRAM_THREAD_ID_S1 if chat_id is None else thread_id
+    if thread:
+        payload["message_thread_id"] = thread
     try:
         requests.post(url, json=payload, timeout=20)
     except Exception as e:
@@ -294,6 +305,8 @@ def main():
         body += "Nenhum sinal de venda."
 
     send_telegram(header + body)
+    if TELEGRAM_CHANNEL_ID_CLIENTES:
+        send_telegram(header + body, chat_id=TELEGRAM_CHANNEL_ID_CLIENTES, thread_id=TELEGRAM_THREAD_ID_CLIENTES_S1)
     print(f"\n[{hoje}] Finalizado. {len(buys)} compra(s), {len(sells)} venda(s).")
 
 if __name__ == "__main__":
