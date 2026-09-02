@@ -432,20 +432,17 @@ def main():
             f"Detalhe completo nos logs da execução)_\n\n"
         )
 
-    if hits:
-        msg = (
-            f"*Radar 3WS Diário — {hoje}*\n\n"
-            f"{aviso}*Sinais:* {', '.join(hits)}"
-        )
-    else:
-        msg = (
-            f"*Radar 3WS Diário — {hoje}*\n\n"
-            f"{aviso}Nenhum sinal hoje."
-        )
-    send_telegram(msg)
-    send_discord(msg)
+    corpo = f"*Sinais:* {', '.join(hits)}" if hits else "Nenhum sinal hoje."
+
+    # Os avisos (instabilidade de dado, buraco reconstruído) são diagnóstico
+    # interno — não fazem sentido pro assinante pagante, que só quer o sinal.
+    msg_interno   = f"*Radar 3WS Diário — {hoje}*\n\n{aviso}{corpo}"
+    msg_clientes  = f"*Radar 3WS Diário — {hoje}*\n\n{corpo}"
+
+    send_telegram(msg_interno)
+    send_discord(msg_interno)
     if TELEGRAM_CHANNEL_ID_CLIENTES:
-        send_telegram(msg, chat_id=TELEGRAM_CHANNEL_ID_CLIENTES, thread_id=TELEGRAM_THREAD_ID_CLIENTES_D1)
+        send_telegram(msg_clientes, chat_id=TELEGRAM_CHANNEL_ID_CLIENTES, thread_id=TELEGRAM_THREAD_ID_CLIENTES_D1)
     print(f"\n[{hoje}] Finalizado. {len(hits)} sinal(is) enviado(s).")
 
 if __name__ == "__main__":
