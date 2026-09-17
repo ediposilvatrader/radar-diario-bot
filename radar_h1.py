@@ -302,12 +302,12 @@ def main():
     if hits:
         msg = (
             f"*Radar 3WS H1 — {hoje}*\n\n"
-            f"*Sinais:* {', '.join(hits)}"
+            f"*Padrões identificados:* {', '.join(hits)}"
         )
     else:
         msg = (
             f"*Radar 3WS H1 — {hoje}*\n\n"
-            f"Nenhum sinal hoje."
+            f"Nenhum padrão identificado hoje."
         )
     send_telegram(msg)
     if TELEGRAM_CHANNEL_ID_CLIENTES:

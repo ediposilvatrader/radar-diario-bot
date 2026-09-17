@@ -423,7 +423,7 @@ def main():
         datas_str = ", ".join(d.strftime("%d/%m") for d in todas_as_datas)
         print(f"[aviso] buraco no histórico diário do Yahoo Finance reconstruído via intraday em {len(gaps_registrados)} ticker(s) — data(s): {datas_str}")
 
-    corpo = f"*Sinais:* {', '.join(hits)}" if hits else "Nenhum sinal hoje."
+    corpo = f"*Padrões identificados:* {', '.join(hits)}" if hits else "Nenhum padrão identificado hoje."
     msg = f"*Radar 3WS Diário — {hoje}*\n\n{corpo}"
 
     send_telegram(msg)

@@ -296,13 +296,13 @@ def main():
     header = f"*Radar 3WS S1 — {hoje}*\n\n"
     body = ""
     if buys:
-        body += "*Sinais de Compra:* " + ", ".join(buys) + "\n\n"
+        body += "*Padrões de Compra identificados:* " + ", ".join(buys) + "\n\n"
     else:
-        body += "Nenhum sinal de compra.\n\n"
+        body += "Nenhum padrão de compra identificado.\n\n"
     if sells:
-        body += "*Sinais de Venda:* " + ", ".join(sells)
+        body += "*Padrões de Venda identificados:* " + ", ".join(sells)
     else:
-        body += "Nenhum sinal de venda."
+        body += "Nenhum padrão de venda identificado."
 
     send_telegram(header + body)
     if TELEGRAM_CHANNEL_ID_CLIENTES:
