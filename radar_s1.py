@@ -304,9 +304,13 @@ def main():
     else:
         body += "Nenhum padrão de venda identificado."
 
-    send_telegram(header + body)
+    # Só o grupo atual (Comunidade MindTrading, tópico S1).
+    # Os grupos antigos (destino padrão, TELEGRAM_CHAT_ID_S1) não recebem mais
+    # — pedido do Édipo em 07/10/2026.
     if TELEGRAM_CHANNEL_ID_CLIENTES:
         send_telegram(header + body, chat_id=TELEGRAM_CHANNEL_ID_CLIENTES, thread_id=TELEGRAM_THREAD_ID_CLIENTES_S1)
+    else:
+        print("[aviso] TELEGRAM_CHANNEL_ID_CLIENTES ausente — nada enviado ao Telegram")
     print(f"\n[{hoje}] Finalizado. {len(buys)} compra(s), {len(sells)} venda(s).")
 
 if __name__ == "__main__":

@@ -309,9 +309,13 @@ def main():
             f"*Radar 3WS H1 — {hoje}*\n\n"
             f"Nenhum padrão identificado hoje."
         )
-    send_telegram(msg)
+    # Só o grupo atual (Comunidade MindTrading, tópico H1).
+    # Os grupos antigos (destino padrão, TELEGRAM_CHAT_ID_H1) não recebem mais
+    # — pedido do Édipo em 07/10/2026.
     if TELEGRAM_CHANNEL_ID_CLIENTES:
         send_telegram(msg, chat_id=TELEGRAM_CHANNEL_ID_CLIENTES, thread_id=TELEGRAM_THREAD_ID_CLIENTES_H1)
+    else:
+        print("[aviso] TELEGRAM_CHANNEL_ID_CLIENTES ausente — nada enviado ao Telegram")
     print(f"\n[{hoje}] Finalizado. {len(hits)} sinal(is) enviado(s).")
 
 if __name__ == "__main__":
