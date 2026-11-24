@@ -24,7 +24,7 @@ EMA_FAST  = 21
 EMA_MID   = 120
 SMA_LONG  = 200
 
-PRECO_MIN_USD = 50.0
+PRECO_MIN_USD = 25.0
 
 # Modo debug: imprime diagnóstico detalhado de cada ticker no log do GitHub Actions
 # (NÃO afeta a mensagem do Telegram, só aparece nos logs da execução)
