@@ -68,6 +68,10 @@ ETFS = ["BOVA11", "SMAL11", "IVVB11", "DIVO11", "GOLD11"]
 
 TICKERS = [f"{t}.SA" for t in ACOES_IBOVESPA + ETFS]
 
+# Motivo da reprovação de cada ticker na execução atual — usado na fase de
+# teste para mandar a lista completa (e o Édipo conferir no gráfico).
+MOTIVOS = {}
+
 # =======================
 # HELPERS
 # =======================
@@ -197,6 +201,8 @@ def check_symbol(sym: str, calendario_ref: set, gaps_registrados: dict) -> bool:
     ticker = yf.Ticker(sym)
 
     def dbg(msg):
+        if msg.startswith("REPROVADO"):
+            MOTIVOS[sym] = msg
         if DEBUG:
             print(f"    [{sym}] {msg}")
 
@@ -365,7 +371,27 @@ def main():
     pregao = max(calendario_ref).strftime("%d/%m") if calendario_ref else "?"
 
     corpo = f"*Padrões identificados:* {', '.join(hits)}" if hits else "Nenhum padrão identificado."
-    msg = f"*Radar 3WS B3 Diário (teste) — pregão de {pregao}*\n\n{corpo}"
+
+    # Fase de teste: lista completa, separada pelo motivo, para conferência.
+    def nomes(filtro):
+        return sorted(t.replace(".SA", "") for t, m in MOTIVOS.items() if filtro(m))
+
+    sem_padrao = nomes(lambda m: "padrão" in m or "closes" in m or "4 barras" in m)
+    abaixo     = nomes(lambda m: "médias" in m)
+    fora       = nomes(lambda m: "liquidez" in m or "histórico" in m)
+    erro       = sorted(t.replace(".SA", "") for t in TICKERS
+                        if t.replace(".SA", "") not in hits and t not in MOTIVOS)
+
+    def bloco(titulo, lista):
+        return f"\n\n*{titulo} ({len(lista)}):*\n{', '.join(lista) if lista else '—'}"
+
+    msg = (
+        f"*Radar 3WS B3 Diário (teste) — pregão de {pregao}*\n\n{corpo}"
+        + bloco("Acima das médias no D1 e no semanal, sem o padrão", sem_padrao)
+        + bloco("Abaixo das médias (D1 e/ou semanal)", abaixo)
+        + bloco("Fora por liquidez ou histórico curto", fora)
+        + (bloco("Erro de dado", erro) if erro else "")
+    )
     send_telegram(msg)
     print(f"\n[{hoje}] Finalizado. {len(hits)} padrão(ões) identificado(s).")
 
