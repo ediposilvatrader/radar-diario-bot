@@ -1,0 +1,32 @@
+name: Radar B3 Diário
+
+on:
+  # Disparo externo (cron-job.org chamando a API do GitHub), igual aos outros
+  # radares — o `schedule:` nativo do GitHub falha silenciosamente.
+  workflow_dispatch: {}
+
+jobs:
+  run-radar-b3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    concurrency:
+      group: radar-b3
+      cancel-in-progress: true
+
+    steps:
+      - name: Confira o código
+        uses: actions/checkout@v6
+
+      - name: Configurar Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Dependências de instalação
+        run: pip install yfinance requests pandas
+
+      - name: Executar radar B3
+        env:
+          TELEGRAM_TOKEN:            ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID_B3_TESTE: ${{ secrets.TELEGRAM_CHAT_ID_B3_TESTE }}
+        run: python radar_b3.py
